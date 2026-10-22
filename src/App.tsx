@@ -8,8 +8,6 @@ import {
   ShieldCheck,
   Sun,
   Moon,
-  Cloud,
-  LogOut,
   Search,
   CheckCircle2,
   AlertTriangle,
@@ -58,20 +56,6 @@ import {
   saveEpisodeOffline,
   triggerBrowserFileDownload,
 } from './lib/offlineStorage';
-import {
-  User,
-  auth,
-  ensureUserProfileInCloud,
-  onAuthStateChanged,
-  removeDownloadTaskFromCloud,
-  removeWatchHistoryFromCloud,
-  signInWithGoogleAccount,
-  signOutAccount,
-  subscribeToCloudSync,
-  syncDownloadTaskToCloud,
-  syncWatchHistoryItemToCloud,
-  testFirestoreConnection,
-} from './lib/firebase';
 
 type ActiveSection = 'catalog' | 'queue' | 'player' | 'history' | 'offline';
 
@@ -190,11 +174,6 @@ export default function App() {
   );
   const [simulateOfflineMode, setSimulateOfflineMode] = useState(false);
 
-  // Firebase Auth & Sync state
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
-
   // Toast notification banner
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
 
@@ -253,9 +232,8 @@ export default function App() {
     localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(watchHistory));
   }, [watchHistory]);
 
-  // Validate Firestore connection on boot and load offline episodes
+  // Load offline episodes from IndexedDB on boot
   useEffect(() => {
-    testFirestoreConnection();
     listOfflineEpisodes().then(setOfflineEpisodes);
   }, []);
 
@@ -268,87 +246,6 @@ export default function App() {
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
-  // Firebase Auth & Firestore real-time subscription
-  useEffect(() => {
-    let unsubCloud: (() => void) | null = null;
-    const unsubAuth = onAuthStateChanged(
-      auth,
-      (user) => {
-        setCurrentUser(user);
-        if (unsubCloud) {
-          unsubCloud();
-          unsubCloud = null;
-        }
-        if (user) {
-          ensureUserProfileInCloud({
-            user,
-            preferredPlatform: platform,
-            preferredQuality: defaultQuality,
-            preferredVoiceover: defaultVoiceover,
-            theme,
-          })
-            .then(() => {
-              setLastSyncTime(new Date().toLocaleTimeString('ru-RU'));
-              unsubCloud = subscribeToCloudSync(user, {
-                onProfile: (prof) => {
-                  if (prof.preferredPlatform) setPlatform(prof.preferredPlatform);
-                  if (prof.preferredQuality) setDefaultQuality(prof.preferredQuality);
-                  if (prof.preferredVoiceover) setDefaultVoiceover(prof.preferredVoiceover);
-                  if (prof.theme) setTheme(prof.theme);
-                },
-                onWatchHistory: (cloudItems) => {
-                  if (cloudItems.length > 0) {
-                    setWatchHistory((prev) => {
-                      const merged = [...prev];
-                      for (const ci of cloudItems) {
-                        if (!ci.id || !ci.animeId) continue;
-                        const idx = merged.findIndex((m) => m.id === ci.id);
-                        const fullItem: WatchHistoryItem = {
-                          id: ci.id,
-                          animeId: ci.animeId,
-                          animeTitle: ci.animeTitle || 'Аниме',
-                          artworkTheme: 'alchemist',
-                          episodeNumber: ci.episodeNumber || 1,
-                          episodeTitle: ci.episodeTitle || 'Эпизод 1',
-                          voiceover: ci.voiceover || 'AniLibria',
-                          quality: (ci.quality as VideoQuality) || '1080p',
-                          sourceSite: (ci.sourceSite as SourceSite) || 'YummyAnime.TV',
-                          progressSeconds: ci.progressSeconds ?? 0,
-                          durationSeconds: ci.durationSeconds ?? 1440,
-                          updatedAtIso: new Date().toISOString(),
-                        };
-                        if (idx >= 0) {
-                          merged[idx] = fullItem;
-                        } else {
-                          merged.unshift(fullItem);
-                        }
-                      }
-                      return merged;
-                    });
-                    setLastSyncTime(new Date().toLocaleTimeString('ru-RU'));
-                  }
-                },
-                onDownloadQueue: () => {
-                  setLastSyncTime(new Date().toLocaleTimeString('ru-RU'));
-                },
-              });
-            })
-            .catch((err) => {
-              console.error(err);
-            });
-        }
-      },
-      (err) => {
-        console.error(err);
-      }
-    );
-
-    return () => {
-      unsubAuth();
-      if (unsubCloud) unsubCloud();
     };
   }, []);
 
@@ -376,9 +273,6 @@ export default function App() {
             saveEpisodeOffline(completedTask).then(() => {
               listOfflineEpisodes().then(setOfflineEpisodes);
             });
-            if (currentUser) {
-              syncDownloadTaskToCloud(currentUser, completedTask).catch(() => {});
-            }
             return completedTask;
           }
           return {
@@ -391,7 +285,7 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [downloadQueue, currentUser]);
+  }, [downloadQueue]);
 
   // Filtered search results by site
   const filteredSearchResults = useMemo(() => {
@@ -471,15 +365,11 @@ export default function App() {
         return [newTask, ...prev];
       });
 
-      if (currentUser) {
-        syncDownloadTaskToCloud(currentUser, newTask).catch(() => {});
-      }
-
       showBanner(
         `Добавлено в очередь: «${anime.title}» (${resolvedSeasonTitle}, ${anime.sourceSite}) — Серия ${episode.number} [${voiceover}, ${quality}]`
       );
     },
-    [platform, currentUser, showBanner]
+    [platform, showBanner]
   );
 
   // Batch queue all episodes of the selected season
@@ -558,13 +448,9 @@ export default function App() {
         return [historyItem, ...filtered];
       });
 
-      if (currentUser) {
-        syncWatchHistoryItemToCloud(currentUser, historyItem).catch(() => {});
-      }
-
       setActiveSection('player');
     },
-    [currentUser]
+    []
   );
 
   // Handle progress update from built-in player
@@ -603,12 +489,8 @@ export default function App() {
         }
         return [updatedItem, ...prev];
       });
-
-      if (currentUser) {
-        syncWatchHistoryItemToCloud(currentUser, updatedItem).catch(() => {});
-      }
     },
-    [playerState, currentUser]
+    [playerState]
   );
 
   // Execute Universal Search (by title OR URL)
@@ -656,9 +538,6 @@ export default function App() {
           speedMBps: nextStatus === 'downloading' ? 21.4 : 0,
           updatedAtIso: new Date().toISOString(),
         };
-        if (currentUser) {
-          syncDownloadTaskToCloud(currentUser, updated).catch(() => {});
-        }
         return updated;
       })
     );
@@ -679,18 +558,12 @@ export default function App() {
     await saveEpisodeOffline(completed);
     const updatedOffline = await listOfflineEpisodes();
     setOfflineEpisodes(updatedOffline);
-    if (currentUser) {
-      syncDownloadTaskToCloud(currentUser, completed).catch(() => {});
-    }
     showBanner(`Серия ${task.episodeNumber} («${task.animeTitle}») сохранена в оффлайн-хранилище.`);
   };
 
   // Remove download task
   const handleRemoveTask = (taskId: string) => {
     setDownloadQueue((prev) => prev.filter((t) => t.id !== taskId));
-    if (currentUser) {
-      removeDownloadTaskFromCloud(currentUser, taskId).catch(() => {});
-    }
   };
 
   // Export platform batch script (.sh / .ps1)
@@ -720,33 +593,32 @@ export default function App() {
     showBanner(`Защищённый скрипт «${script.filename}» выгружен для ${platform.toUpperCase()}.`);
   };
 
-  // Google Sign-In handler
-  const handleGoogleSignIn = async () => {
-    setAuthError(null);
-    try {
-      const user = await signInWithGoogleAccount();
-      await ensureUserProfileInCloud({
-        user,
-        preferredPlatform: platform,
-        preferredQuality: defaultQuality,
-        preferredVoiceover: defaultVoiceover,
+  // Export local profile & history backup JSON
+  const handleExportLocalBackup = () => {
+    const payload = {
+      app: 'AniMac Studio',
+      exportedAt: new Date().toISOString(),
+      preferences: {
         theme,
-      });
-      for (const h of watchHistory) {
-        await syncWatchHistoryItemToCloud(user, h);
-      }
-      for (const q of downloadQueue) {
-        await syncDownloadTaskToCloud(user, q);
-      }
-      setLastSyncTime(new Date().toLocaleTimeString('ru-RU'));
-      showBanner(`Аккаунт ${user.email || user.displayName} синхронизирован с облаком.`);
-    } catch (err) {
-      setAuthError(
-        err instanceof Error
-          ? `Не удалось выполнить вход через окно авторизации: ${err.message}`
-          : 'Ошибка авторизации'
-      );
-    }
+        platform,
+        defaultVoiceover,
+        defaultQuality,
+      },
+      watchHistory,
+      downloadQueue,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'animac-studio-backup.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    showBanner('Локальная резервная копия настроек и истории сохранена (animac-studio-backup.json).');
   };
 
   const activePlayerAnime = playerState.anime;
@@ -1018,31 +890,14 @@ export default function App() {
               )}
             </button>
 
-            {currentUser ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-600 dark:text-slate-300 font-medium truncate max-w-[180px]">
-                  {currentUser.email || currentUser.displayName}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => signOutAccount()}
-                  aria-label="Выйти из аккаунта"
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  Выйти
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={handleGoogleSignIn}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 hover:opacity-90 transition-opacity cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <Cloud className="w-3.5 h-3.5" />
-                Синхронизация аккаунта
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleExportLocalBackup}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 hover:opacity-90 transition-opacity cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <HardDrive className="w-3.5 h-3.5" />
+              Локальный бэкап (.json)
+            </button>
           </div>
         </div>
       </section>
@@ -2208,7 +2063,7 @@ export default function App() {
           </section>
         )}
 
-        {/* SECTION 4: WATCH HISTORY & CLOUD ACCOUNT SYNC */}
+        {/* SECTION 4: WATCH HISTORY & LOCAL STORAGE SYNC */}
         {activeSection === 'history' && (
           <section aria-labelledby="history-heading" className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2217,28 +2072,25 @@ export default function App() {
                   id="history-heading"
                   className="text-2xl font-bold text-slate-900 dark:text-white"
                 >
-                  История просмотров и облачная синхронизация
+                  История просмотров (локальное хранилище)
                 </h1>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                  Автоматическое сохранение таймкода, выбранной озвучки и качества между macOS, Windows и Android.
+                  Автоматическое сохранение таймкода, выбранной озвучки и качества в localStorage браузера без внешних серверов.
                 </p>
               </div>
 
               <div className="flex items-center gap-3">
-                {lastSyncTime && (
-                  <span className="text-xs font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
-                    Облако синхронизировано в {lastSyncTime}
-                  </span>
-                )}
+                <button
+                  type="button"
+                  onClick={handleExportLocalBackup}
+                  className="px-3.5 py-2 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  Экспорт истории (.json)
+                </button>
                 {watchHistory.length > 0 && (
                   <button
                     type="button"
                     onClick={() => {
-                      if (currentUser) {
-                        watchHistory.forEach((h) =>
-                          removeWatchHistoryFromCloud(currentUser, h.id).catch(() => {})
-                        );
-                      }
                       setWatchHistory([]);
                       showBanner('История просмотров очищена.');
                     }}
@@ -2249,12 +2101,6 @@ export default function App() {
                 )}
               </div>
             </div>
-
-            {authError && (
-              <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs text-amber-800 dark:text-amber-300">
-                {authError}
-              </div>
-            )}
 
             {watchHistory.length === 0 ? (
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-12 text-center space-y-3">
@@ -2350,9 +2196,6 @@ export default function App() {
                           type="button"
                           onClick={() => {
                             setWatchHistory((prev) => prev.filter((h) => h.id !== item.id));
-                            if (currentUser) {
-                              removeWatchHistoryFromCloud(currentUser, item.id).catch(() => {});
-                            }
                           }}
                           aria-label={`Удалить из истории ${item.animeTitle}`}
                           className="p-2 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
@@ -2504,7 +2347,7 @@ export default function App() {
                     <strong>3. Контроль целостности SHA-256:</strong> каждый оффлайн-контейнер в IndexedDB подписывается детерминированным хэшем SHA-256.
                   </li>
                   <li>
-                    <strong>4. Изоляция облачных данных (Firestore Rules):</strong> доступ к истории и очереди возможен только для владельца аккаунта с подтверждённым email (<code>email_verified == true</code>) и проверкой схемы каждого поля.
+                    <strong>4. Автономное локальное хранение (Zero-Cloud):</strong> все настройки, история просмотров и очередь загрузок хранятся исключительно локально в браузерном <code>localStorage</code> и <code>IndexedDB</code> без отправки данных на сторонние серверы и без внешних API-ключей.
                   </li>
                 </ul>
               </div>

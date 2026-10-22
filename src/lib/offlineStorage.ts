@@ -138,7 +138,7 @@ export async function removeOfflineEpisode(taskId: string): Promise<void> {
 
 export function triggerBrowserFileDownload(task: DownloadTask): void {
   const bytes = buildMp4ContainerBuffer(task);
-  const blob = new Blob([bytes], { type: 'video/mp4' });
+  const blob = new Blob([bytes as unknown as BlobPart], { type: 'video/mp4' });
   const url = URL.createObjectURL(blob);
   const safeTitle = sanitizeFileName(task.animeTitle);
   const safeVoice = sanitizeFileName(task.voiceover);
