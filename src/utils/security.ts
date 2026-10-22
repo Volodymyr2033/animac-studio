@@ -4,9 +4,11 @@ export type VideoQuality = '2160p' | '1080p' | '720p' | '480p';
 
 export interface UrlValidationResult {
   valid: boolean;
+  isUrlInput: boolean;
   sanitizedUrl?: string;
   sourceSite?: SourceSite;
   slug?: string;
+  searchQuery?: string;
   error?: string;
   securityFlags: {
     httpsEnforced: boolean;
@@ -40,13 +42,31 @@ const PRIVATE_HOST_PATTERNS = [
 ];
 
 /**
- * Validates and sanitizes an anime URL against SSRF, XSS, and untrusted domains.
+ * Determines whether the user input is a URL/URI attempt or a plain-text anime title search query.
+ */
+export function isLikelyUrlInput(rawInput: string): boolean {
+  const trimmed = rawInput.trim();
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/i.test(trimmed)) return true;
+  if (/(?:^|\/|\\)\.\.(?:\/|\\|$)|%2e%2e/i.test(trimmed)) return true;
+  if (/^(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+)(\/|:|$)/i.test(trimmed)) {
+    return true;
+  }
+  // Matches domain-like inputs without spaces (e.g., animego.org/anime/..., evil.com/anime)
+  if (!/\s/.test(trimmed) && /^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Validates and sanitizes an anime URL or classifies plain text as a safe search query.
+ * Never blocks normal Russian/English anime title searches with "Invalid URL format".
  */
 export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
   const trimmed = rawInput.trim();
   const defaultFlags = {
-    httpsEnforced: false,
-    domainAllowlisted: false,
+    httpsEnforced: true,
+    domainAllowlisted: true,
     ssrfProtected: true,
     xssClean: true,
   };
@@ -54,11 +74,13 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
   if (!trimmed) {
     return {
       valid: false,
-      error: 'Введите ссылку на страницу аниме с YummyAnime.TV, AnimeGO или AnimeVost.org.',
+      isUrlInput: false,
+      error: 'Введите название аниме (например, «Черный клевер») или прямую ссылку на тайтл.',
       securityFlags: defaultFlags,
     };
   }
 
+  // Always block XSS / dangerous script protocols or shell/HTML injection characters
   if (
     /[<>'"`\0\r\n]/.test(trimmed) ||
     /^(javascript|data|vbscript|file|ftp):/i.test(trimmed) ||
@@ -66,8 +88,19 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
   ) {
     return {
       valid: false,
+      isUrlInput: true,
       error: 'Заблокировано системой безопасности: обнаружен опасный протокол, обход директорий (Path Traversal) или инъекция символов.',
       securityFlags: { ...defaultFlags, xssClean: false },
+    };
+  }
+
+  // If the input is a plain-text title query (not a URL), allow it cleanly for multi-site search
+  if (!isLikelyUrlInput(trimmed)) {
+    return {
+      valid: true,
+      isUrlInput: false,
+      searchQuery: trimmed.slice(0, 120),
+      securityFlags: defaultFlags,
     };
   }
 
@@ -78,8 +111,9 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
   } catch {
     return {
       valid: false,
-      error: 'Некорректный формат URL. Пример: https://animego.org/anime/solo-leveling',
-      securityFlags: defaultFlags,
+      isUrlInput: true,
+      error: 'Некорректная ссылка. Введите название аниме текстом или ссылку с YummyAnime.TV, AnimeGO, AnimeVost.org.',
+      securityFlags: { ...defaultFlags, httpsEnforced: false, domainAllowlisted: false },
     };
   }
 
@@ -89,6 +123,7 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
     if (pattern.test(hostname)) {
       return {
         valid: false,
+        isUrlInput: true,
         error: 'Заблокировано защитой SSRF: обращения к локальным и внутренним IP-адресам запрещены.',
         securityFlags: { ...defaultFlags, ssrfProtected: false },
       };
@@ -98,6 +133,7 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
   if (parsed.protocol !== 'https:') {
     return {
       valid: false,
+      isUrlInput: true,
       error: 'Требуется защищённое соединение HTTPS (TLS 1.3). Незащищённый HTTP заблокирован.',
       securityFlags: { ...defaultFlags, httpsEnforced: false },
     };
@@ -107,6 +143,7 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
   if (!matchedSite) {
     return {
       valid: false,
+      isUrlInput: true,
       error: `Домен «${hostname}» не входит в белый список проверенных источников (YummyAnime.TV, AnimeGO, AnimeVost.org).`,
       securityFlags: { ...defaultFlags, httpsEnforced: true, domainAllowlisted: false },
     };
@@ -117,24 +154,18 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  if (rawSegments.some((s) => s === '..' || s === '.' || s.includes('%2e%2e') || s.includes('%2E%2E'))) {
-    return {
-      valid: false,
-      error: 'Заблокировано: обнаружена попытка обхода директорий (Path Traversal) в URL.',
-      securityFlags: { ...defaultFlags, httpsEnforced: true, domainAllowlisted: true, xssClean: false },
-    };
-  }
-
   const lastSegment = rawSegments[rawSegments.length - 1] || 'anime-title';
-  const cleanSlug = lastSegment
-    .replace(/\.html?$/i, '')
-    .replace(/[^a-zA-Z0-9_-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80) || 'custom-anime';
+  const cleanSlug =
+    lastSegment
+      .replace(/\.html?$/i, '')
+      .replace(/[^a-zA-Z0-9_-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 80) || 'custom-anime';
 
   return {
     valid: true,
+    isUrlInput: true,
     sanitizedUrl: `https://${hostname}${parsed.pathname}`,
     sourceSite: matchedSite,
     slug: cleanSlug,
@@ -167,10 +198,8 @@ export function sanitizeFileName(input: string): string {
 export function escapeShellArg(arg: string, platform: PlatformTarget): string {
   const clean = arg.replace(/[\0\r\n]/g, '');
   if (platform === 'windows') {
-    // PowerShell single-quoted string: only single quote is escaped by doubling ''
     return `'${clean.replace(/'/g, "''")}'`;
   }
-  // POSIX sh / zsh (macOS & Android Termux): single-quote wrapping with '\'' escape
   return `'${clean.replace(/'/g, "'\\''")}'`;
 }
 
@@ -228,7 +257,10 @@ export interface ScriptableTask {
 /**
  * Generates a hardened, command-injection-safe download script for macOS, Windows 11, or Android (Termux).
  */
-export function generatePlatformBatchScript(tasks: ScriptableTask[], platform: PlatformTarget): {
+export function generatePlatformBatchScript(
+  tasks: ScriptableTask[],
+  platform: PlatformTarget
+): {
   filename: string;
   content: string;
   mimeType: string;

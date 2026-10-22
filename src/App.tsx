@@ -11,7 +11,6 @@ import {
   Cloud,
   LogOut,
   Search,
-  Link2,
   CheckCircle2,
   AlertTriangle,
   HardDrive,
@@ -19,18 +18,26 @@ import {
   RefreshCw,
   Clock,
   WifiOff,
+  Globe,
+  Sparkles,
+  X,
+  Layers,
 } from 'lucide-react';
 import {
+  AnimeSeason,
   AnimeSeries,
+  DEFAULT_PLAYER_ANIME_LIST,
   DownloadTask,
   EpisodeInfo,
-  INITIAL_ANIME_CATALOG,
+  POPULAR_SEARCH_CHIPS,
+  SOURCE_SITES_DIRECTORY,
   VIDEO_QUALITIES,
   VOICEOVER_STUDIOS,
   WatchHistoryItem,
+  buildEpisodeRangeGroups,
   calculateQueueMetrics,
   createDownloadTask,
-  extractAnimeFromUrl,
+  searchAnimeAcrossSites,
   formatTimecode,
   estimateEpisodeSizeMB,
 } from './utils/animeEngine';
@@ -40,7 +47,6 @@ import {
   VideoQuality,
   buildTargetFilePath,
   generatePlatformBatchScript,
-  validateAnimeSourceUrl,
 } from './utils/security';
 import { AnimeArtwork } from './components/AnimeArtwork';
 import { PWAInstallButton } from './components/PWAInstallButton';
@@ -69,13 +75,22 @@ import {
 
 type ActiveSection = 'catalog' | 'queue' | 'player' | 'history' | 'offline';
 
+interface CardSelectionState {
+  seasonId: string;
+  rangeIndex: number;
+  episodeSearch: string;
+  episodeNumber: number;
+  voiceover: string;
+  quality: VideoQuality;
+}
+
 const STORAGE_KEYS = {
-  THEME: 'animac_theme_v1',
-  PLATFORM: 'animac_platform_v1',
-  VOICEOVER: 'animac_voiceover_v1',
-  QUALITY: 'animac_quality_v1',
-  QUEUE: 'animac_queue_v1',
-  HISTORY: 'animac_history_v1',
+  THEME: 'animac_theme_v2',
+  PLATFORM: 'animac_platform_v2',
+  VOICEOVER: 'animac_voiceover_v2',
+  QUALITY: 'animac_quality_v2',
+  QUEUE: 'animac_queue_v2',
+  HISTORY: 'animac_history_v2',
 };
 
 export default function App() {
@@ -108,117 +123,62 @@ export default function App() {
   // Navigation section
   const [activeSection, setActiveSection] = useState<ActiveSection>('catalog');
 
-  // Catalog state & filters
-  const [catalog, setCatalog] = useState<AnimeSeries[]>(INITIAL_ANIME_CATALOG);
+  // Universal Search & URL Input state
+  const [universalInput, setUniversalInput] = useState('');
+  const [activeQueryLabel, setActiveQueryLabel] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<AnimeSeries[]>([]);
   const [siteFilter, setSiteFilter] = useState<'ALL' | SourceSite>('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // Per-card selected episode, voiceover, and quality overrides
-  const [cardSelections, setCardSelections] = useState<
-    Record<string, { episodeNumber: number; voiceover: string; quality: VideoQuality }>
-  >({});
-
-  // Direct URL Extractor state
-  const [urlInput, setUrlInput] = useState('');
-  const [urlFeedback, setUrlFeedback] = useState<{
+  const [searchFeedback, setSearchFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
 
-  // Download Queue state (seeded with 2 initial items so queue is immediately demonstrative)
+  // Per-card selected season, episode range, episode search, episode, voiceover, and quality overrides
+  const [cardSelections, setCardSelections] = useState<Record<string, CardSelectionState>>({});
+
+  // Download Queue state (starts empty until user downloads episodes, persisted in v2 storage)
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.QUEUE);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
-      // Fallback to seed
+      // Ignore
     }
-    const seed1 = createDownloadTask({
-      anime: INITIAL_ANIME_CATALOG[0],
-      episode: INITIAL_ANIME_CATALOG[0].episodes[0],
-      voiceover: 'AniLibria',
-      quality: '1080p',
-      platform: 'macos',
-    });
-    seed1.progressPercent = 100;
-    seed1.status = 'completed';
-    seed1.downloadedMB = seed1.sizeMB;
-    seed1.speedMBps = 0;
-    seed1.isOfflineAvailable = true;
-
-    const seed2 = createDownloadTask({
-      anime: INITIAL_ANIME_CATALOG[1],
-      episode: INITIAL_ANIME_CATALOG[1].episodes[0],
-      voiceover: 'StudioBand (Студийная Банда)',
-      quality: '2160p',
-      platform: 'macos',
-    });
-    seed2.progressPercent = 64;
-    seed2.status = 'downloading';
-    seed2.downloadedMB = Math.round(seed2.sizeMB * 0.64);
-
-    return [seed1, seed2];
+    return [];
   });
 
-  // Watch History state (seeded with 2 initial entries)
+  // Watch History state (starts empty until user watches episodes, persisted in v2 storage)
   const [watchHistory, setWatchHistory] = useState<WatchHistoryItem[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.HISTORY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
-      // Fallback
+      // Ignore
     }
-    return [
-      {
-        id: 'kurogane-ronin-ep-1',
-        animeId: 'kurogane-ronin',
-        animeTitle: 'Клинок полуночного ронина',
-        artworkTheme: 'samurai',
-        episodeNumber: 1,
-        episodeTitle: 'Пепел над рекой Камо',
-        voiceover: 'AniLibria',
-        quality: '1080p',
-        sourceSite: 'YummyAnime.TV',
-        progressSeconds: 860,
-        durationSeconds: 1440,
-        updatedAtIso: new Date().toISOString(),
-      },
-      {
-        id: 'orbital-horizon-zero-ep-1',
-        animeId: 'orbital-horizon-zero',
-        animeTitle: 'Орбитальный рубеж: Эгида-09',
-        artworkTheme: 'mecha',
-        episodeNumber: 1,
-        episodeTitle: 'Точка апогея 36 000 км',
-        voiceover: 'AnimeVost',
-        quality: '1080p',
-        sourceSite: 'AnimeVost.org',
-        progressSeconds: 1120,
-        durationSeconds: 1470,
-        updatedAtIso: new Date().toISOString(),
-      },
-    ];
+    return [];
   });
 
   // Active Player state
   const [playerState, setPlayerState] = useState<{
-    animeId: string;
+    anime: AnimeSeries;
+    seasonId: string;
     episodeNumber: number;
     voiceover: string;
     quality: VideoQuality;
     initialProgressSeconds: number;
   }>({
-    animeId: INITIAL_ANIME_CATALOG[0].id,
+    anime: DEFAULT_PLAYER_ANIME_LIST[0],
+    seasonId: DEFAULT_PLAYER_ANIME_LIST[0].defaultSeasonId,
     episodeNumber: 1,
     voiceover: 'AniLibria',
     quality: '1080p',
-    initialProgressSeconds: 860,
+    initialProgressSeconds: 0,
   });
 
   // Offline IndexedDB episodes state
@@ -261,13 +221,14 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.PLATFORM, platform);
-    // Update target paths in queue to match selected platform
     setDownloadQueue((prev) =>
       prev.map((task) => ({
         ...task,
         targetPath: buildTargetFilePath({
           platform,
-          animeTitle: task.animeTitle,
+          animeTitle: task.seasonTitle
+            ? `${task.animeTitle} (${task.seasonTitle})`
+            : task.animeTitle,
           episodeNumber: task.episodeNumber,
           voiceover: task.voiceover,
           quality: task.quality,
@@ -292,22 +253,10 @@ export default function App() {
     localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(watchHistory));
   }, [watchHistory]);
 
-  // Validate Firestore connection on boot and initialize offline vault
+  // Validate Firestore connection on boot and load offline episodes
   useEffect(() => {
     testFirestoreConnection();
-    listOfflineEpisodes().then((stored) => {
-      if (stored.length === 0) {
-        // Ensure initial completed seed task is stored in IndexedDB
-        const completedSeed = downloadQueue.find((t) => t.status === 'completed');
-        if (completedSeed) {
-          saveEpisodeOffline(completedSeed).then(() => {
-            listOfflineEpisodes().then(setOfflineEpisodes);
-          });
-        }
-      } else {
-        setOfflineEpisodes(stored);
-      }
-    });
+    listOfflineEpisodes().then(setOfflineEpisodes);
   }, []);
 
   // Online/Offline listeners
@@ -357,14 +306,11 @@ export default function App() {
                       for (const ci of cloudItems) {
                         if (!ci.id || !ci.animeId) continue;
                         const idx = merged.findIndex((m) => m.id === ci.id);
-                        const matchedAnime =
-                          INITIAL_ANIME_CATALOG.find((a) => a.id === ci.animeId) ||
-                          INITIAL_ANIME_CATALOG[0];
                         const fullItem: WatchHistoryItem = {
                           id: ci.id,
                           animeId: ci.animeId,
-                          animeTitle: ci.animeTitle || matchedAnime.title,
-                          artworkTheme: matchedAnime.artworkTheme,
+                          animeTitle: ci.animeTitle || 'Аниме',
+                          artworkTheme: 'alchemist',
                           episodeNumber: ci.episodeNumber || 1,
                           episodeTitle: ci.episodeTitle || 'Эпизод 1',
                           voiceover: ci.voiceover || 'AniLibria',
@@ -415,7 +361,7 @@ export default function App() {
       setDownloadQueue((prev) =>
         prev.map((task) => {
           if (task.status !== 'downloading') return task;
-          const nextPercent = Math.min(100, task.progressPercent + 6);
+          const nextPercent = Math.min(100, task.progressPercent + 10);
           const nextDownloaded = Math.round((task.sizeMB * nextPercent) / 100);
           if (nextPercent >= 100) {
             const completedTask: DownloadTask = {
@@ -442,30 +388,22 @@ export default function App() {
           };
         })
       );
-    }, 1200);
+    }, 1000);
 
     return () => clearInterval(timer);
   }, [downloadQueue, currentUser]);
 
-  // Filtered catalog
-  const filteredCatalog = useMemo(() => {
-    return catalog.filter((anime) => {
-      const matchesSite = siteFilter === 'ALL' || anime.sourceSite === siteFilter;
-      const q = searchQuery.trim().toLowerCase();
-      const matchesSearch =
-        !q ||
-        anime.title.toLowerCase().includes(q) ||
-        anime.originalTitle.toLowerCase().includes(q) ||
-        anime.sourceSite.toLowerCase().includes(q) ||
-        anime.availableVoiceovers.some((v) => v.toLowerCase().includes(q));
-      return matchesSite && matchesSearch;
+  // Filtered search results by site
+  const filteredSearchResults = useMemo(() => {
+    return searchResults.filter((anime) => {
+      return siteFilter === 'ALL' || anime.sourceSite === siteFilter;
     });
-  }, [catalog, siteFilter, searchQuery]);
+  }, [searchResults, siteFilter]);
 
   const queueMetrics = useMemo(() => calculateQueueMetrics(downloadQueue), [downloadQueue]);
 
   // Get selection state for an anime card
-  const getCardSelection = (anime: AnimeSeries) => {
+  const getCardSelection = (anime: AnimeSeries): CardSelectionState => {
     const existing = cardSelections[anime.id];
     const validVoiceover = anime.availableVoiceovers.includes(defaultVoiceover)
       ? defaultVoiceover
@@ -474,17 +412,20 @@ export default function App() {
       ? defaultQuality
       : anime.availableQualities[0];
 
+    const defaultSeason =
+      anime.seasons.find((s) => s.id === anime.defaultSeasonId) || anime.seasons[0];
+
     return {
+      seasonId: existing?.seasonId ?? defaultSeason.id,
+      rangeIndex: existing?.rangeIndex ?? 0,
+      episodeSearch: existing?.episodeSearch ?? '',
       episodeNumber: existing?.episodeNumber ?? 1,
       voiceover: existing?.voiceover ?? validVoiceover,
       quality: existing?.quality ?? validQuality,
     };
   };
 
-  const updateCardSelection = (
-    anime: AnimeSeries,
-    patch: Partial<{ episodeNumber: number; voiceover: string; quality: VideoQuality }>
-  ) => {
+  const updateCardSelection = (anime: AnimeSeries, patch: Partial<CardSelectionState>) => {
     const current = getCardSelection(anime);
     setCardSelections((prev) => ({
       ...prev,
@@ -494,9 +435,22 @@ export default function App() {
 
   // Add single episode to download queue
   const handleQueueEpisode = useCallback(
-    (anime: AnimeSeries, episode: EpisodeInfo, voiceover: string, quality: VideoQuality) => {
+    (
+      anime: AnimeSeries,
+      episode: EpisodeInfo,
+      voiceover: string,
+      quality: VideoQuality,
+      seasonTitle?: string
+    ) => {
+      const resolvedSeasonTitle =
+        seasonTitle ||
+        anime.seasons.find((s) => s.id === anime.defaultSeasonId)?.title ||
+        anime.seasons[0]?.title ||
+        'Сезон 1';
+
       const newTask = createDownloadTask({
         anime,
+        seasonTitle: resolvedSeasonTitle,
         episode,
         voiceover,
         quality,
@@ -522,18 +476,19 @@ export default function App() {
       }
 
       showBanner(
-        `Добавлено в очередь: «${anime.title}» — Серия ${episode.number} (${voiceover}, ${quality})`
+        `Добавлено в очередь: «${anime.title}» (${resolvedSeasonTitle}, ${anime.sourceSite}) — Серия ${episode.number} [${voiceover}, ${quality}]`
       );
     },
     [platform, currentUser, showBanner]
   );
 
-  // Batch queue all episodes of an anime
-  const handleQueueAllEpisodes = (anime: AnimeSeries) => {
+  // Batch queue all episodes of the selected season
+  const handleQueueSeasonEpisodes = (anime: AnimeSeries, season: AnimeSeason) => {
     const sel = getCardSelection(anime);
-    const newTasks = anime.episodes.map((ep, idx) => {
+    const newTasks = season.episodes.map((ep, idx) => {
       const task = createDownloadTask({
         anime,
+        seasonTitle: season.title,
         episode: ep,
         voiceover: sel.voiceover,
         quality: sel.quality,
@@ -553,7 +508,7 @@ export default function App() {
     });
 
     showBanner(
-      `Весь сезон (${anime.episodes.length} сер.) «${anime.title}» добавлен в очередь (${sel.voiceover}, ${sel.quality})`
+      `${season.title} (${season.episodes.length} сер.) «${anime.title}» (${anime.sourceSite}) добавлен в очередь загрузок`
     );
     setActiveSection('queue');
   };
@@ -565,10 +520,17 @@ export default function App() {
       episode: EpisodeInfo,
       voiceover: string,
       quality: VideoQuality,
-      resumeSeconds = 0
+      resumeSeconds = 0,
+      seasonId?: string
     ) => {
+      const activeSeason =
+        (seasonId ? anime.seasons.find((s) => s.id === seasonId) : undefined) ||
+        anime.seasons.find((s) => s.id === anime.defaultSeasonId) ||
+        anime.seasons[0];
+
       setPlayerState({
-        animeId: anime.id,
+        anime,
+        seasonId: activeSeason.id,
         episodeNumber: episode.number,
         voiceover,
         quality,
@@ -576,9 +538,10 @@ export default function App() {
       });
 
       const historyItem: WatchHistoryItem = {
-        id: `${anime.id}-ep-${episode.number}`,
+        id: `${anime.id}-${activeSeason.id}-ep-${episode.number}`,
         animeId: anime.id,
         animeTitle: anime.title,
+        seasonTitle: activeSeason.title,
         artworkTheme: anime.artworkTheme,
         episodeNumber: episode.number,
         episodeTitle: episode.title,
@@ -607,15 +570,19 @@ export default function App() {
   // Handle progress update from built-in player
   const handlePlayerProgressUpdate = useCallback(
     (progressSeconds: number, durationSeconds: number) => {
-      const anime = catalog.find((a) => a.id === playerState.animeId) || catalog[0];
+      const anime = playerState.anime;
+      const activeSeason =
+        anime.seasons.find((s) => s.id === playerState.seasonId) || anime.seasons[0];
       const ep =
-        anime.episodes.find((e) => e.number === playerState.episodeNumber) || anime.episodes[0];
-      const historyId = `${anime.id}-ep-${ep.number}`;
+        activeSeason.episodes.find((e) => e.number === playerState.episodeNumber) ||
+        activeSeason.episodes[0];
+      const historyId = `${anime.id}-${activeSeason.id}-ep-${ep.number}`;
 
       const updatedItem: WatchHistoryItem = {
         id: historyId,
         animeId: anime.id,
         animeTitle: anime.title,
+        seasonTitle: activeSeason.title,
         artworkTheme: anime.artworkTheme,
         episodeNumber: ep.number,
         episodeTitle: ep.title,
@@ -641,39 +608,40 @@ export default function App() {
         syncWatchHistoryItemToCloud(currentUser, updatedItem).catch(() => {});
       }
     },
-    [catalog, playerState, currentUser]
+    [playerState, currentUser]
   );
 
-  // Handle Direct URL extraction form
-  const handleExtractUrlSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const res = extractAnimeFromUrl(urlInput);
-    if (!res.ok || !res.anime) {
-      setUrlFeedback({
+  // Execute Universal Search (by title OR URL)
+  const executeUniversalSearch = useCallback((rawQuery: string) => {
+    const res = searchAnimeAcrossSites(rawQuery);
+    if (!res.ok) {
+      setSearchFeedback({
         type: 'error',
-        message: res.error || 'Не удалось распознать ссылку.',
+        message: res.error || 'Не удалось выполнить поиск.',
       });
       return;
     }
 
-    const extracted = res.anime;
-    setCatalog((prev) => {
-      if (prev.some((a) => a.id === extracted.id)) return prev;
-      return [extracted, ...prev];
-    });
-
-    // Also enqueue Episode 1 immediately with user's default voiceover & quality
-    const ep1 = extracted.episodes[0];
-    const vo = extracted.availableVoiceovers.includes(defaultVoiceover)
-      ? defaultVoiceover
-      : extracted.availableVoiceovers[0];
-    handleQueueEpisode(extracted, ep1, vo, defaultQuality);
-
-    setUrlFeedback({
+    setSearchResults(res.results);
+    setActiveQueryLabel(res.queryLabel);
+    setSiteFilter('ALL');
+    setSearchFeedback({
       type: 'success',
-      message: `Проверено (TLS 1.3 · ${extracted.sourceSite}): «${extracted.title}» распознано и Серия 1 добавлена в очередь (${vo}, ${defaultQuality}).`,
+      message:
+        res.mode === 'url'
+          ? `Ссылка проверена (TLS 1.3): найден релиз «${res.queryLabel}» и зеркала на YummyAnime.TV, AnimeGO и AnimeVost.org.`
+          : `Найдено ${res.results.length} релиза по запросу «${res.queryLabel}» одновременно на YummyAnime.TV, AnimeGO и AnimeVost.org.`,
     });
-    setUrlInput('');
+  }, []);
+
+  const handleUniversalSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    executeUniversalSearch(universalInput);
+  };
+
+  const handleQuickChipSearch = (chipText: string) => {
+    setUniversalInput(chipText);
+    executeUniversalSearch(chipText);
   };
 
   // Toggle task pause/resume
@@ -729,7 +697,7 @@ export default function App() {
   const handleExportBatchScript = () => {
     const script = generatePlatformBatchScript(
       downloadQueue.map((t) => ({
-        animeTitle: t.animeTitle,
+        animeTitle: t.seasonTitle ? `${t.animeTitle} (${t.seasonTitle})` : t.animeTitle,
         episodeNumber: t.episodeNumber,
         voiceover: t.voiceover,
         quality: t.quality,
@@ -781,36 +749,64 @@ export default function App() {
     }
   };
 
-  const activePlayerAnime =
-    catalog.find((a) => a.id === playerState.animeId) || INITIAL_ANIME_CATALOG[0];
+  const activePlayerAnime = playerState.anime;
+  const activePlayerSeason =
+    activePlayerAnime.seasons.find((s) => s.id === playerState.seasonId) ||
+    activePlayerAnime.seasons[0];
   const activePlayerEpisode =
-    activePlayerAnime.episodes.find((e) => e.number === playerState.episodeNumber) ||
-    activePlayerAnime.episodes[0];
+    activePlayerSeason.episodes.find((e) => e.number === playerState.episodeNumber) ||
+    activePlayerSeason.episodes[0];
   const isCurrentEpisodeOffline = offlineEpisodes.some(
     (o) =>
       o.animeId === activePlayerAnime.id && o.episodeNumber === activePlayerEpisode.number
   );
 
+  const availablePlayerAnimeChoices =
+    searchResults.length > 0 ? searchResults : DEFAULT_PLAYER_ANIME_LIST;
+
   const effectiveOffline = !isOnline || simulateOfflineMode;
+
+  const resolveAnimeForHistoryOrTask = (
+    animeId: string,
+    title: string,
+    site: SourceSite
+  ): AnimeSeries => {
+    const foundInResults = searchResults.find((a) => a.id === animeId);
+    if (foundInResults) return foundInResults;
+    const searched = searchAnimeAcrossSites(title);
+    if (searched.ok && searched.results.length > 0) {
+      return searched.results.find((r) => r.sourceSite === site) || searched.results[0];
+    }
+    return DEFAULT_PLAYER_ANIME_LIST[0];
+  };
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors">
       {/* STRICT 3-ZONE TOP BAR CONTRACT */}
       <header className="sticky top-0 z-40 flex items-center justify-between gap-8 px-6 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xs">
-        {/* Zone 1: Single text element wordmark */}
+        {/* Zone 1: Single brand link with Nekomimi icon */}
         <a
           href="#catalog"
           onClick={(e) => {
             e.preventDefault();
             setActiveSection('catalog');
           }}
-          className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
+          className="inline-flex items-center gap-2.5 text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
         >
+          <img
+            src="/icon.svg"
+            alt=""
+            aria-hidden="true"
+            className="w-7 h-7 rounded-lg shrink-0"
+          />
           AniMac Studio
         </a>
 
         {/* Zone 2: 5 concise single-line text navigation links */}
-        <nav aria-label="Основная навигация" className="hidden md:flex items-center gap-6 overflow-x-auto text-sm font-medium">
+        <nav
+          aria-label="Основная навигация"
+          className="hidden md:flex items-center gap-6 overflow-x-auto text-sm font-medium"
+        >
           <a
             href="#catalog"
             onClick={(e) => {
@@ -823,7 +819,7 @@ export default function App() {
                 : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            Каталог ({catalog.length})
+            Поиск и Главная
           </a>
           <a
             href="#queue"
@@ -896,7 +892,7 @@ export default function App() {
       >
         {(
           [
-            { id: 'catalog', label: `Каталог (${catalog.length})` },
+            { id: 'catalog', label: 'Поиск' },
             { id: 'queue', label: `Очередь (${downloadQueue.length})` },
             { id: 'player', label: 'Плеер' },
             { id: 'history', label: `История (${watchHistory.length})` },
@@ -1092,10 +1088,10 @@ export default function App() {
 
       {/* MAIN CONTENT VIEWPORT */}
       <main className="flex-1 max-w-[1360px] w-full mx-auto px-6 py-8 space-y-8">
-        {/* SECTION 1: CATALOG & URL EXTRACTOR */}
+        {/* SECTION 1: UNIVERSAL SEARCH & HOME SCREEN */}
         {activeSection === 'catalog' && (
           <>
-            {/* Direct URL Extractor & Cybersecurity Verification Bar */}
+            {/* Universal Search & Link Extractor Box */}
             <section
               aria-labelledby="extractor-heading"
               className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6"
@@ -1106,10 +1102,10 @@ export default function App() {
                     id="extractor-heading"
                     className="text-xl md:text-2xl font-bold text-slate-900 dark:text-white tracking-tight"
                   >
-                    Загрузчик аниме с YummyAnime.TV, AnimeGO и AnimeVost.org
+                    Универсальный поиск и загрузка аниме
                   </h1>
                   <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                    Вставьте прямую ссылку на страницу аниме или выберите тайтл из каталога ниже, укажите студию озвучки и качество видео (до 2160p 4K).
+                    Введите название аниме на русском или английском (например, «Черный клевер» / «Black Clover») или прямую ссылку с YummyAnime.TV, AnimeGO или AnimeVost.org.
                   </p>
                 </div>
 
@@ -1120,301 +1116,743 @@ export default function App() {
                   </span>
                   <span aria-hidden="true">·</span>
                   <span className="font-mono tabular-nums">
-                    Путь: {platform === 'macos' ? '~/Movies/AniMac' : platform === 'windows' ? 'C:\\Videos\\AniMac' : '/storage/emulated/0/Movies/AniMac'}
+                    Путь:{' '}
+                    {platform === 'macos'
+                      ? '~/Movies/AniMac'
+                      : platform === 'windows'
+                      ? 'C:\\Videos\\AniMac'
+                      : '/storage/emulated/0/Movies/AniMac'}
                   </span>
                 </div>
               </div>
 
-              <form onSubmit={handleExtractUrlSubmit} className="mt-5 flex flex-col sm:flex-row gap-3">
+              <form onSubmit={handleUniversalSearchSubmit} className="mt-5 flex flex-col sm:flex-row gap-3">
                 <div className="relative flex-1">
-                  <label htmlFor="anime-url-input" className="sr-only">
-                    Ссылка на аниме с YummyAnime.TV, AnimeGO или AnimeVost.org
+                  <label htmlFor="anime-universal-input" className="sr-only">
+                    Введите название аниме или ссылку с YummyAnime.TV, AnimeGO, AnimeVost.org
                   </label>
-                  <Link2 className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
-                    id="anime-url-input"
+                    id="anime-universal-input"
                     type="text"
-                    value={urlInput}
-                    onChange={(e) => setUrlInput(e.target.value)}
-                    placeholder="https://yummyanime.tv/catalog/item/... или https://animego.org/anime/... или https://animevost.org/..."
-                    className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    value={universalInput}
+                    onChange={(e) => setUniversalInput(e.target.value)}
+                    placeholder="Название («Черный клевер», «Black Clover») или ссылка https://animego.org/..."
+                    className="w-full pl-10 pr-10 py-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
                   />
+                  {universalInput && (
+                    <button
+                      type="button"
+                      onClick={() => setUniversalInput('')}
+                      aria-label="Очистить поле поиска"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
                 <button
                   type="submit"
                   className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  <Download className="w-4 h-4" />
-                  Распознать и скачать
+                  <Search className="w-4 h-4" />
+                  Найти на 3 сайтах
                 </button>
               </form>
 
-              {/* Quick sample URL buttons */}
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                <span>Быстрый пример ссылки:</span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setUrlInput('https://yummyanime.tv/catalog/item/klinok-polunochnogo-ronina')
-                  }
-                  className="underline hover:text-sky-500 cursor-pointer"
-                >
-                  YummyAnime.TV
-                </button>
-                <span aria-hidden="true">·</span>
-                <button
-                  type="button"
-                  onClick={() => setUrlInput('https://animego.org/anime/solo-leveling-arise')}
-                  className="underline hover:text-sky-500 cursor-pointer"
-                >
-                  AnimeGO
-                </button>
-                <span aria-hidden="true">·</span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setUrlInput('https://animevost.org/tip/tv/3842-orbitalnyy-rubezh-egida-09.html')
-                  }
-                  className="underline hover:text-sky-500 cursor-pointer"
-                >
-                  AnimeVost.org
-                </button>
+              {/* Popular Search Suggestion Chips (b) */}
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400 inline-flex items-center gap-1 mr-1">
+                  <Sparkles className="w-3.5 h-3.5 text-sky-500" />
+                  Популярные запросы:
+                </span>
+                {POPULAR_SEARCH_CHIPS.map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    onClick={() => handleQuickChipSearch(chip)}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                      activeQueryLabel?.toLowerCase() === chip.toLowerCase()
+                        ? 'bg-sky-600 text-white border-sky-600'
+                        : 'bg-slate-100 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-sky-500 hover:text-sky-600 dark:hover:text-sky-400'
+                    }`}
+                  >
+                    {chip}
+                  </button>
+                ))}
               </div>
 
-              {urlFeedback && (
+              {searchFeedback && (
                 <div
                   role="alert"
                   className={`mt-4 p-3.5 rounded-lg border text-xs flex items-center justify-between gap-3 ${
-                    urlFeedback.type === 'success'
+                    searchFeedback.type === 'success'
                       ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
                       : 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300'
                   }`}
                 >
                   <span className="inline-flex items-center gap-2 font-medium">
-                    {urlFeedback.type === 'success' ? (
+                    {searchFeedback.type === 'success' ? (
                       <CheckCircle2 className="w-4 h-4 shrink-0" />
                     ) : (
                       <AlertTriangle className="w-4 h-4 shrink-0" />
                     )}
-                    {urlFeedback.message}
+                    {searchFeedback.message}
                   </span>
-                  {urlFeedback.type === 'success' && (
+                  {searchResults.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => setActiveSection('queue')}
+                      onClick={() => {
+                        setSearchResults([]);
+                        setActiveQueryLabel(null);
+                        setSearchFeedback(null);
+                        setUniversalInput('');
+                      }}
                       className="font-semibold underline whitespace-nowrap cursor-pointer"
                     >
-                      Перейти к очереди
+                      Сбросить результаты
                     </button>
                   )}
                 </div>
               )}
             </section>
 
-            {/* Filter & Search Bar */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              {/* Interactive segmented filter controls (allowed per frontend-design Section 1.A) */}
-              <div
-                role="group"
-                aria-label="Фильтр по сайту-источнику"
-                className="inline-flex items-center gap-1 p-1 rounded-lg bg-slate-200/80 dark:bg-slate-900 border border-slate-300/60 dark:border-slate-800 self-start"
-              >
-                {(['ALL', 'YummyAnime.TV', 'AnimeGO', 'AnimeVost.org'] as const).map((site) => (
-                  <button
-                    key={site}
-                    type="button"
-                    onClick={() => setSiteFilter(site)}
-                    className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                      siteFilter === site
-                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                    }`}
+            {/* DYNAMIC SEARCH RESULTS ACROSS YummyAnime.TV, AnimeGO, AnimeVost.org */}
+            {searchResults.length > 0 && (
+              <section aria-labelledby="search-results-heading" className="space-y-5">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div>
+                    <h2
+                      id="search-results-heading"
+                      className="text-lg font-bold text-slate-900 dark:text-white"
+                    >
+                      Результаты поиска по запросу «{activeQueryLabel}» ({filteredSearchResults.length})
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Синхронная выдача с YummyAnime.TV, AnimeGO и AnimeVost.org с выбором всех сезонов, серий, озвучки и качества.
+                    </p>
+                  </div>
+
+                  <div
+                    role="group"
+                    aria-label="Фильтр результатов по сайту-источнику"
+                    className="inline-flex items-center gap-1 p-1 rounded-lg bg-slate-200/80 dark:bg-slate-900 border border-slate-300/60 dark:border-slate-800 self-start"
                   >
-                    {site === 'ALL' ? 'Все источники' : site}
-                  </button>
+                    {(['ALL', 'YummyAnime.TV', 'AnimeGO', 'AnimeVost.org'] as const).map((site) => (
+                      <button
+                        key={site}
+                        type="button"
+                        onClick={() => setSiteFilter(site)}
+                        className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                          siteFilter === site
+                            ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        {site === 'ALL' ? 'Все 3 сайта' : site}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-6">
+                  {filteredSearchResults.map((anime) => {
+                    const sel = getCardSelection(anime);
+                    const activeSeason =
+                      anime.seasons.find((s) => s.id === sel.seasonId) || anime.seasons[0];
+                    const rangeGroups = buildEpisodeRangeGroups(activeSeason.episodes.length, 25);
+                    const safeRangeIndex =
+                      sel.rangeIndex >= 0 && sel.rangeIndex < rangeGroups.length
+                        ? sel.rangeIndex
+                        : 0;
+                    const activeRange = rangeGroups[safeRangeIndex] || rangeGroups[0];
+
+                    // Filter episodes by search query or active range group
+                    const cleanEpQuery = sel.episodeSearch.trim();
+                    const visibleEpisodes = cleanEpQuery
+                      ? activeSeason.episodes.filter((ep) => {
+                          const qNum = Number(cleanEpQuery);
+                          if (!Number.isNaN(qNum) && qNum > 0) {
+                            return ep.number === qNum || String(ep.number).startsWith(cleanEpQuery);
+                          }
+                          return (
+                            String(ep.number).includes(cleanEpQuery.toLowerCase()) ||
+                            ep.title.toLowerCase().includes(cleanEpQuery.toLowerCase())
+                          );
+                        })
+                      : activeSeason.episodes.filter(
+                          (ep) => ep.number >= activeRange.start && ep.number <= activeRange.end
+                        );
+
+                    const selectedEp =
+                      activeSeason.episodes.find((e) => e.number === sel.episodeNumber) ||
+                      activeSeason.episodes[0];
+                    const estMB = estimateEpisodeSizeMB(selectedEp.durationSeconds, sel.quality);
+
+                    return (
+                      <article
+                        key={anime.id}
+                        className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden flex flex-col md:flex-row"
+                      >
+                        {/* Left Artwork Column */}
+                        <div className="md:w-52 shrink-0 bg-slate-950 relative aspect-[16/9] md:aspect-auto">
+                          <AnimeArtwork
+                            theme={anime.artworkTheme}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+
+                        {/* Right Content Column */}
+                        <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                              <span className="font-semibold text-sky-600 dark:text-sky-400">
+                                {anime.sourceSite}
+                              </span>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono tabular-nums">{activeSeason.year}</span>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono tabular-nums">Рейтинг {anime.rating}</span>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono tabular-nums font-medium text-slate-700 dark:text-slate-300">
+                                {activeSeason.title}: {activeSeason.episodes.length} сер.
+                              </span>
+                              <span aria-hidden="true">·</span>
+                              <span>{anime.genres.join(' / ')}</span>
+                            </div>
+
+                            <h3 className="mt-1.5 text-lg font-bold text-slate-900 dark:text-white leading-snug">
+                              {anime.title}
+                            </h3>
+                            <p className="mt-0.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+                              {anime.originalTitle}
+                            </p>
+                            <p className="mt-2 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                              {anime.synopsis}
+                            </p>
+                          </div>
+
+                          {/* 1. Season Switcher Tabs */}
+                          <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label={`Сезоны ${anime.title}`}>
+                                <span className="text-xs font-semibold text-slate-600 dark:text-slate-400 inline-flex items-center gap-1 mr-1">
+                                  <Layers className="w-3.5 h-3.5 text-sky-500" />
+                                  Сезон:
+                                </span>
+                                {anime.seasons.map((season) => {
+                                  const isSelected = season.id === activeSeason.id;
+                                  return (
+                                    <button
+                                      key={season.id}
+                                      type="button"
+                                      role="tab"
+                                      aria-selected={isSelected}
+                                      onClick={() =>
+                                        updateCardSelection(anime, {
+                                          seasonId: season.id,
+                                          rangeIndex: 0,
+                                          episodeSearch: '',
+                                          episodeNumber: 1,
+                                        })
+                                      }
+                                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                                        isSelected
+                                          ? 'bg-sky-600 text-white border-sky-600'
+                                          : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-sky-500'
+                                      }`}
+                                    >
+                                      {season.title} ({season.episodes.length} сер.)
+                                    </button>
+                                  );
+                                })}
+                              </div>
+
+                              {activeSeason.subtitle && (
+                                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  {activeSeason.subtitle}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* 2. Episode Range Grouping (1–25, 26–50...) & Number Search when > 24 episodes */}
+                            {activeSeason.episodes.length > 24 && (
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mr-1">
+                                    Серии:
+                                  </span>
+                                  {rangeGroups.map((grp, rIdx) => (
+                                    <button
+                                      key={grp.label}
+                                      type="button"
+                                      onClick={() => {
+                                        updateCardSelection(anime, {
+                                          rangeIndex: rIdx,
+                                          episodeSearch: '',
+                                          episodeNumber: grp.start,
+                                        });
+                                      }}
+                                      className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold transition-colors cursor-pointer ${
+                                        safeRangeIndex === rIdx && !cleanEpQuery
+                                          ? 'bg-sky-600 text-white'
+                                          : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-sky-500'
+                                      }`}
+                                    >
+                                      {grp.label}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                <div className="relative sm:w-48 shrink-0">
+                                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                  <input
+                                    type="text"
+                                    value={sel.episodeSearch}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      const num = Number(val.trim());
+                                      const matchedEp =
+                                        !Number.isNaN(num) &&
+                                        num >= 1 &&
+                                        num <= activeSeason.episodes.length
+                                          ? num
+                                          : sel.episodeNumber;
+                                      updateCardSelection(anime, {
+                                        episodeSearch: val,
+                                        episodeNumber: matchedEp,
+                                      });
+                                    }}
+                                    placeholder={`Поиск № серии (1–${activeSeason.episodes.length})`}
+                                    aria-label={`Поиск по номеру серии для ${anime.title}`}
+                                    className="w-full pl-8 pr-2.5 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100"
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Interactive Episode Number Buttons Grid for active range / season */}
+                            <div className="space-y-1.5">
+                              <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                                <span>
+                                  Быстрый выбор серии ({visibleEpisodes.length} из {activeSeason.episodes.length}):
+                                </span>
+                                <span className="font-mono font-medium text-slate-700 dark:text-slate-300">
+                                  Выбрана: Серия {selectedEp.number} — «{selectedEp.title}»
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-1">
+                                {visibleEpisodes.map((ep) => {
+                                  const isEpActive = ep.number === selectedEp.number;
+                                  return (
+                                    <button
+                                      key={ep.number}
+                                      type="button"
+                                      onClick={() =>
+                                        updateCardSelection(anime, { episodeNumber: ep.number })
+                                      }
+                                      title={`Серия ${ep.number}: ${ep.title}`}
+                                      className={`min-w-[36px] px-2 py-1 rounded-md text-xs font-mono tabular-nums font-semibold border transition-colors cursor-pointer ${
+                                        isEpActive
+                                          ? 'bg-sky-600 text-white border-sky-600'
+                                          : 'bg-slate-50 dark:bg-slate-800/90 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-sky-500'
+                                      }`}
+                                    >
+                                      {ep.number}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* Episode Dropdown, Voiceover & Video Quality Controls */}
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                              <div>
+                                <label
+                                  htmlFor={`ep-select-${anime.id}`}
+                                  className="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1"
+                                >
+                                  Полный список ({activeSeason.episodes.length} сер.)
+                                </label>
+                                <select
+                                  id={`ep-select-${anime.id}`}
+                                  value={selectedEp.number}
+                                  onChange={(e) => {
+                                    const nextEpNum = Number(e.target.value);
+                                    const nextRangeIdx = rangeGroups.findIndex(
+                                      (g) => nextEpNum >= g.start && nextEpNum <= g.end
+                                    );
+                                    updateCardSelection(anime, {
+                                      episodeNumber: nextEpNum,
+                                      rangeIndex: nextRangeIdx >= 0 ? nextRangeIdx : sel.rangeIndex,
+                                    });
+                                  }}
+                                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100"
+                                >
+                                  {activeSeason.episodes.map((ep) => (
+                                    <option key={ep.number} value={ep.number}>
+                                      Серия {ep.number}: {ep.title}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <label
+                                  htmlFor={`vo-select-${anime.id}`}
+                                  className="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1"
+                                >
+                                  Озвучка
+                                </label>
+                                <select
+                                  id={`vo-select-${anime.id}`}
+                                  value={sel.voiceover}
+                                  onChange={(e) =>
+                                    updateCardSelection(anime, { voiceover: e.target.value })
+                                  }
+                                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100"
+                                >
+                                  {anime.availableVoiceovers.map((vo) => (
+                                    <option key={vo} value={vo}>
+                                      {vo}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <label
+                                  htmlFor={`q-select-${anime.id}`}
+                                  className="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1"
+                                >
+                                  Качество (~{estMB} МБ)
+                                </label>
+                                <select
+                                  id={`q-select-${anime.id}`}
+                                  value={sel.quality}
+                                  onChange={(e) =>
+                                    updateCardSelection(anime, {
+                                      quality: e.target.value as VideoQuality,
+                                    })
+                                  }
+                                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-mono font-medium text-slate-900 dark:text-slate-100"
+                                >
+                                  {anime.availableQualities.map((q) => (
+                                    <option key={q} value={q}>
+                                      {q}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="flex flex-wrap items-center gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleQueueEpisode(
+                                    anime,
+                                    selectedEp,
+                                    sel.voiceover,
+                                    sel.quality,
+                                    activeSeason.title
+                                  )
+                                }
+                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                Скачать серию {selectedEp.number}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleOpenInPlayer(
+                                    anime,
+                                    selectedEp,
+                                    sel.voiceover,
+                                    sel.quality,
+                                    0,
+                                    activeSeason.id
+                                  )
+                                }
+                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                <Play className="w-3.5 h-3.5 text-sky-500" />
+                                Смотреть серию {selectedEp.number}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleQueueSeasonEpisodes(anime, activeSeason)}
+                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                <FolderDown className="w-3.5 h-3.5 text-sky-500" />
+                                Скачать весь сезон ({activeSeason.episodes.length} сер.)
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {/* HOME BLOCK A: COMPACT SOURCE SITES STATUS & QUICK LINKS */}
+            <section aria-labelledby="sources-status-heading" className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <h2
+                  id="sources-status-heading"
+                  className="text-base font-bold text-slate-900 dark:text-white"
+                >
+                  Подключённые сайты-источники
+                </h2>
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  Прямой парсинг потоков и озвучек
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {SOURCE_SITES_DIRECTORY.map((src) => (
+                  <div
+                    key={src.site}
+                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex flex-col justify-between gap-4"
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-bold text-slate-900 dark:text-white inline-flex items-center gap-2">
+                          <Globe className="w-4 h-4 text-sky-500 shrink-0" />
+                          {src.site}
+                        </span>
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                          {src.statusLabel}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Озвучки: {src.supportedStudios}
+                      </p>
+                      <p className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                        Домен: {src.mirrorDomain} · Макс. поток: {src.maxResolution}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800/80">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const q = activeQueryLabel || 'Черный клевер';
+                          setUniversalInput(q);
+                          executeUniversalSearch(q);
+                          setSiteFilter(src.site);
+                        }}
+                        className="flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 transition-colors cursor-pointer text-center"
+                      >
+                        Искать на {src.site}
+                      </button>
+                      <a
+                        href={src.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap"
+                      >
+                        Открыть сайт ↗
+                      </a>
+                    </div>
+                  </div>
                 ))}
               </div>
+            </section>
 
-              <div className="relative w-full md:w-80">
-                <label htmlFor="catalog-search-input" className="sr-only">
-                  Поиск по названию аниме или студии озвучки
-                </label>
-                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  id="catalog-search-input"
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Поиск аниме или озвучки..."
-                  className="w-full pl-9 pr-4 py-2 rounded-lg border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                />
-              </div>
-            </div>
-
-            {/* Catalog Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {filteredCatalog.map((anime) => {
-                const sel = getCardSelection(anime);
-                const selectedEp =
-                  anime.episodes.find((e) => e.number === sel.episodeNumber) || anime.episodes[0];
-                const estMB = estimateEpisodeSizeMB(selectedEp.durationSeconds, sel.quality);
-
-                return (
-                  <article
-                    key={anime.id}
-                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden flex flex-col sm:flex-row"
+            {/* HOME BLOCK C: RECENT DOWNLOADS & WATCH HISTORY */}
+            <section aria-labelledby="recent-activity-heading" className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2
+                    id="recent-activity-heading"
+                    className="text-base font-bold text-slate-900 dark:text-white"
                   >
-                    {/* Left Artwork Column */}
-                    <div className="sm:w-44 shrink-0 bg-slate-950 relative aspect-[3/4] sm:aspect-auto">
-                      <AnimeArtwork
-                        theme={anime.artworkTheme}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
+                    Последние загрузки и история просмотров
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Быстрый доступ к скачанным сериям и продолжению просмотра с последнего таймкода
+                  </p>
+                </div>
+                {(downloadQueue.length > 0 || watchHistory.length > 0) && (
+                  <div className="flex items-center gap-3 text-xs font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => setActiveSection('queue')}
+                      className="text-sky-600 dark:text-sky-400 hover:underline cursor-pointer"
+                    >
+                      Вся очередь ({downloadQueue.length})
+                    </button>
+                    <span aria-hidden="true" className="text-slate-400">
+                      ·
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSection('history')}
+                      className="text-sky-600 dark:text-sky-400 hover:underline cursor-pointer"
+                    >
+                      Вся история ({watchHistory.length})
+                    </button>
+                  </div>
+                )}
+              </div>
 
-                    {/* Right Content Column */}
-                    <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                      <div>
-                        {/* Quiet inline metadata (Zero-Pill discipline) */}
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                          <span className="font-semibold text-sky-600 dark:text-sky-400">
-                            {anime.sourceSite}
-                          </span>
-                          <span aria-hidden="true">·</span>
-                          <span className="font-mono tabular-nums">{anime.year}</span>
-                          <span aria-hidden="true">·</span>
-                          <span className="font-mono tabular-nums">Рейтинг {anime.rating}</span>
-                          <span aria-hidden="true">·</span>
-                          <span>{anime.genres.join(' / ')}</span>
+              {downloadQueue.length === 0 && watchHistory.length === 0 ? (
+                <div
+                  data-testid="empty-recent-downloads"
+                  className="rounded-xl border border-dashed border-slate-300 dark:border-slate-800 bg-white/60 dark:bg-slate-900/50 p-10 text-center space-y-2.5"
+                >
+                  <HardDrive className="w-8 h-8 text-slate-400 dark:text-slate-500 mx-auto" />
+                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                    Здесь появятся ваши скачанные серии
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+                    Выберите любой популярный запрос выше (например, «Черный клевер» или «Человек-бензопила») или введите название аниме в строку поиска, чтобы скачать серию или начать просмотр.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {downloadQueue.slice(0, 4).map((task) => {
+                    const matchedAnime = resolveAnimeForHistoryOrTask(
+                      task.animeId,
+                      task.animeTitle,
+                      task.sourceSite
+                    );
+                    const matchedEp = matchedAnime.episodes.find(
+                      (e) => e.number === task.episodeNumber
+                    ) || {
+                      number: task.episodeNumber,
+                      title: task.episodeTitle,
+                      durationSeconds: task.durationSeconds,
+                      releaseDate: '2025',
+                    };
+
+                    return (
+                      <div
+                        key={task.id}
+                        className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex items-center justify-between gap-4"
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span className="font-semibold text-sky-600 dark:text-sky-400">
+                              {task.sourceSite}
+                            </span>
+                            {task.seasonTitle && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>{task.seasonTitle}</span>
+                              </>
+                            )}
+                            <span aria-hidden="true">·</span>
+                            <span>{task.voiceover}</span>
+                            <span aria-hidden="true">·</span>
+                            <span className="font-mono tabular-nums">{task.quality}</span>
+                          </div>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                            {task.animeTitle} — Серия {String(task.episodeNumber).padStart(2, '0')}
+                          </h3>
+                          <p className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                            Статус:{' '}
+                            {task.status === 'completed'
+                              ? 'Готово (Оффлайн)'
+                              : `Загрузка ${task.progressPercent}%`}
+                          </p>
                         </div>
 
-                        <h2 className="mt-1.5 text-lg font-bold text-slate-900 dark:text-white leading-snug">
-                          {anime.title}
-                        </h2>
-                        <p className="text-xs text-slate-400 dark:text-slate-500 font-mono">
-                          {anime.originalTitle}
-                        </p>
-                        <p className="mt-2 text-xs text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed">
-                          {anime.synopsis}
-                        </p>
-                      </div>
-
-                      {/* Episode, Voiceover & Video Quality Controls */}
-                      <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                          <div>
-                            <label
-                              htmlFor={`ep-select-${anime.id}`}
-                              className="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >
-                              Эпизод
-                            </label>
-                            <select
-                              id={`ep-select-${anime.id}`}
-                              value={sel.episodeNumber}
-                              onChange={(e) =>
-                                updateCardSelection(anime, {
-                                  episodeNumber: Number(e.target.value),
-                                })
-                              }
-                              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100"
-                            >
-                              {anime.episodes.map((ep) => (
-                                <option key={ep.number} value={ep.number}>
-                                  Серия {ep.number}: {ep.title}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <label
-                              htmlFor={`vo-select-${anime.id}`}
-                              className="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >
-                              Озвучка
-                            </label>
-                            <select
-                              id={`vo-select-${anime.id}`}
-                              value={sel.voiceover}
-                              onChange={(e) =>
-                                updateCardSelection(anime, { voiceover: e.target.value })
-                              }
-                              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100"
-                            >
-                              {anime.availableVoiceovers.map((vo) => (
-                                <option key={vo} value={vo}>
-                                  {vo}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <label
-                              htmlFor={`q-select-${anime.id}`}
-                              className="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >
-                              Качество (~{estMB} МБ)
-                            </label>
-                            <select
-                              id={`q-select-${anime.id}`}
-                              value={sel.quality}
-                              onChange={(e) =>
-                                updateCardSelection(anime, {
-                                  quality: e.target.value as VideoQuality,
-                                })
-                              }
-                              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-mono font-medium text-slate-900 dark:text-slate-100"
-                            >
-                              {anime.availableQualities.map((q) => (
-                                <option key={q} value={q}>
-                                  {q}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        </div>
-
-                        {/* Action Buttons */}
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <div className="flex items-center gap-2 shrink-0">
                           <button
                             type="button"
                             onClick={() =>
-                              handleQueueEpisode(anime, selectedEp, sel.voiceover, sel.quality)
+                              handleOpenInPlayer(
+                                matchedAnime,
+                                matchedEp,
+                                task.voiceover,
+                                task.quality,
+                                0
+                              )
                             }
-                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap"
                           >
-                            <Download className="w-3.5 h-3.5" />
-                            Скачать серию {sel.episodeNumber}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleOpenInPlayer(anime, selectedEp, sel.voiceover, sel.quality, 0)
-                            }
-                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                          >
-                            <Play className="w-3.5 h-3.5 text-sky-500" />
-                            Смотреть в плеере
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleQueueAllEpisodes(anime)}
-                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                          >
-                            <FolderDown className="w-3.5 h-3.5" />
-                            Весь сезон ({anime.episodes.length} сер.)
+                            Смотреть
                           </button>
                         </div>
                       </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
+                    );
+                  })}
+
+                  {watchHistory.slice(0, 4).map((item) => {
+                    const matchedAnime = resolveAnimeForHistoryOrTask(
+                      item.animeId,
+                      item.animeTitle,
+                      item.sourceSite
+                    );
+                    const matchedEp = matchedAnime.episodes.find(
+                      (e) => e.number === item.episodeNumber
+                    ) || {
+                      number: item.episodeNumber,
+                      title: item.episodeTitle,
+                      durationSeconds: item.durationSeconds,
+                      releaseDate: '2025',
+                    };
+
+                    return (
+                      <div
+                        key={`hist-${item.id}`}
+                        className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex items-center justify-between gap-4"
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                              Просмотрено
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>{item.sourceSite}</span>
+                            {item.seasonTitle && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>{item.seasonTitle}</span>
+                              </>
+                            )}
+                            <span aria-hidden="true">·</span>
+                            <span>{item.voiceover}</span>
+                          </div>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                            {item.animeTitle} — Серия {String(item.episodeNumber).padStart(2, '0')}
+                          </h3>
+                          <p className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                            Таймкод: {formatTimecode(item.progressSeconds)} /{' '}
+                            {formatTimecode(item.durationSeconds)}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleOpenInPlayer(
+                              matchedAnime,
+                              matchedEp,
+                              item.voiceover,
+                              item.quality,
+                              item.progressSeconds
+                            )
+                          }
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          Продолжить
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
           </>
         )}
 
@@ -1470,7 +1908,12 @@ export default function App() {
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <Terminal className="w-3.5 h-3.5 text-sky-500" />
-                  Экспорт скрипта для {platform === 'macos' ? 'macOS (.sh)' : platform === 'windows' ? 'Windows (.ps1)' : 'Android (.sh)'}
+                  Экспорт скрипта для{' '}
+                  {platform === 'macos'
+                    ? 'macOS (.sh)'
+                    : platform === 'windows'
+                    ? 'Windows (.ps1)'
+                    : 'Android (.sh)'}
                 </button>
               </div>
             </div>
@@ -1507,40 +1950,54 @@ export default function App() {
             {downloadQueue.length === 0 ? (
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-12 text-center space-y-3">
                 <p className="text-base font-semibold text-slate-900 dark:text-white">
-                  Очередь загрузок пуста
+                  Здесь появятся ваши скачанные серии
                 </p>
                 <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-                  Перейдите в каталог или вставьте ссылку с YummyAnime.TV, AnimeGO или AnimeVost.org, чтобы добавить эпизоды.
+                  Перейдите на вкладку «Поиск и Главная», введите название аниме (например, «Черный клевер») или ссылку с YummyAnime.TV, AnimeGO или AnimeVost.org.
                 </p>
                 <button
                   type="button"
                   onClick={() => setActiveSection('catalog')}
                   className="px-4 py-2 rounded-lg text-xs font-semibold bg-sky-600 text-white hover:bg-sky-500 transition-colors cursor-pointer"
                 >
-                  Открыть каталог аниме
+                  Перейти к поиску аниме
                 </button>
               </div>
             ) : (
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200 dark:divide-slate-800">
                 {downloadQueue.map((task) => {
-                  const matchedAnime =
-                    catalog.find((a) => a.id === task.animeId) || INITIAL_ANIME_CATALOG[0];
+                  const matchedAnime = resolveAnimeForHistoryOrTask(
+                    task.animeId,
+                    task.animeTitle,
+                    task.sourceSite
+                  );
                   const matchedEp = matchedAnime.episodes.find(
                     (e) => e.number === task.episodeNumber
                   ) || {
                     number: task.episodeNumber,
                     title: task.episodeTitle,
                     durationSeconds: task.durationSeconds,
-                    releaseDate: '2026',
+                    releaseDate: '2025',
                   };
 
                   return (
-                    <div key={task.id} className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div
+                      key={task.id}
+                      className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                    >
                       <div className="space-y-1.5 flex-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                           <span className="font-semibold text-sky-600 dark:text-sky-400">
                             {task.sourceSite}
                           </span>
+                          {task.seasonTitle && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-medium text-slate-700 dark:text-slate-300">
+                                {task.seasonTitle}
+                              </span>
+                            </>
+                          )}
                           <span aria-hidden="true">·</span>
                           <span>Озвучка: {task.voiceover}</span>
                           <span aria-hidden="true">·</span>
@@ -1552,7 +2009,8 @@ export default function App() {
                         </div>
 
                         <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">
-                          {task.animeTitle} — Серия {String(task.episodeNumber).padStart(2, '0')}: {task.episodeTitle}
+                          {task.animeTitle} — Серия {String(task.episodeNumber).padStart(2, '0')}:{' '}
+                          {task.episodeTitle}
                         </h3>
 
                         {/* Progress Bar */}
@@ -1663,26 +2121,32 @@ export default function App() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <h1 id="player-heading" className="text-2xl font-bold text-slate-900 dark:text-white">
-                  Встроенный плеер · {activePlayerAnime.title}
+                  Встроенный плеер · {activePlayerAnime.title} ({activePlayerSeason.title})
                 </h1>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                  Серия {activePlayerEpisode.number}: {activePlayerEpisode.title} · Озвучка: {playerState.voiceover} · Поток {playerState.quality}
+                  Серия {activePlayerEpisode.number}: {activePlayerEpisode.title} · Озвучка:{' '}
+                  {playerState.voiceover} · Поток {playerState.quality} ({activePlayerAnime.sourceSite})
                 </p>
               </div>
 
-              {/* Anime Switcher inside Player */}
+              {/* Source / Anime Switcher inside Player */}
               <div className="flex items-center gap-2">
-                <label htmlFor="player-anime-switcher" className="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                  Сменить тайтл:
+                <label
+                  htmlFor="player-anime-switcher"
+                  className="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap"
+                >
+                  Источник / Релиз:
                 </label>
                 <select
                   id="player-anime-switcher"
                   value={activePlayerAnime.id}
                   onChange={(e) => {
                     const nextAnime =
-                      catalog.find((a) => a.id === e.target.value) || INITIAL_ANIME_CATALOG[0];
+                      availablePlayerAnimeChoices.find((a) => a.id === e.target.value) ||
+                      DEFAULT_PLAYER_ANIME_LIST[0];
                     setPlayerState({
-                      animeId: nextAnime.id,
+                      anime: nextAnime,
+                      seasonId: nextAnime.defaultSeasonId,
                       episodeNumber: 1,
                       voiceover: nextAnime.availableVoiceovers[0],
                       quality: nextAnime.availableQualities[0],
@@ -1691,7 +2155,7 @@ export default function App() {
                   }}
                   className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100"
                 >
-                  {catalog.map((a) => (
+                  {availablePlayerAnimeChoices.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.title} ({a.sourceSite})
                     </option>
@@ -1702,18 +2166,28 @@ export default function App() {
 
             <VideoPlayerView
               anime={activePlayerAnime}
+              season={activePlayerSeason}
               episode={activePlayerEpisode}
               voiceover={playerState.voiceover}
               quality={playerState.quality}
               initialProgressSeconds={playerState.initialProgressSeconds}
               isOfflineCached={isCurrentEpisodeOffline}
+              onSelectSeason={(nextSeason) =>
+                setPlayerState((prev) => ({
+                  ...prev,
+                  seasonId: nextSeason.id,
+                  episodeNumber: 1,
+                  initialProgressSeconds: 0,
+                }))
+              }
               onSelectEpisode={(ep) =>
                 handleOpenInPlayer(
                   activePlayerAnime,
                   ep,
                   playerState.voiceover,
                   playerState.quality,
-                  0
+                  0,
+                  activePlayerSeason.id
                 )
               }
               onChangeVoiceover={(vo) =>
@@ -1724,6 +2198,7 @@ export default function App() {
               }
               onUpdateProgress={handlePlayerProgressUpdate}
               onQueueEpisode={handleQueueEpisode}
+              onQueueSeason={handleQueueSeasonEpisodes}
             />
           </section>
         )}
@@ -1733,7 +2208,10 @@ export default function App() {
           <section aria-labelledby="history-heading" className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h1 id="history-heading" className="text-2xl font-bold text-slate-900 dark:text-white">
+                <h1
+                  id="history-heading"
+                  className="text-2xl font-bold text-slate-900 dark:text-white"
+                >
                   История просмотров и облачная синхронизация
                 </h1>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
@@ -1779,7 +2257,7 @@ export default function App() {
                   История просмотров пуста
                 </p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Запустите любую серию во встроенном плеере, чтобы прогресс автоматически сохранился.
+                  Найдите любое аниме через поиск и запустите серию во встроенном плеере, чтобы прогресс автоматически сохранился.
                 </p>
               </div>
             ) : (
@@ -1789,15 +2267,18 @@ export default function App() {
                     100,
                     Math.round((item.progressSeconds / Math.max(1, item.durationSeconds)) * 100)
                   );
-                  const matchedAnime =
-                    catalog.find((a) => a.id === item.animeId) || INITIAL_ANIME_CATALOG[0];
+                  const matchedAnime = resolveAnimeForHistoryOrTask(
+                    item.animeId,
+                    item.animeTitle,
+                    item.sourceSite
+                  );
                   const matchedEp = matchedAnime.episodes.find(
                     (e) => e.number === item.episodeNumber
                   ) || {
                     number: item.episodeNumber,
                     title: item.episodeTitle,
                     durationSeconds: item.durationSeconds,
-                    releaseDate: '2026',
+                    releaseDate: '2025',
                   };
 
                   return (
@@ -1810,6 +2291,12 @@ export default function App() {
                           <span className="font-semibold text-sky-600 dark:text-sky-400">
                             {item.sourceSite}
                           </span>
+                          {item.seasonTitle && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span>{item.seasonTitle}</span>
+                            </>
+                          )}
                           <span aria-hidden="true">·</span>
                           <span>Озвучка: {item.voiceover}</span>
                           <span aria-hidden="true">·</span>
@@ -1817,7 +2304,8 @@ export default function App() {
                         </div>
 
                         <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">
-                          {item.animeTitle} — Серия {String(item.episodeNumber).padStart(2, '0')}: {item.episodeTitle}
+                          {item.animeTitle} — Серия {String(item.episodeNumber).padStart(2, '0')}:{' '}
+                          {item.episodeTitle}
                         </h3>
 
                         <div className="flex items-center gap-3 pt-1">
@@ -1829,7 +2317,8 @@ export default function App() {
                           </div>
                           <span className="text-xs font-mono tabular-nums text-slate-600 dark:text-slate-400">
                             <Clock className="w-3 h-3 inline mr-1" />
-                            {formatTimecode(item.progressSeconds)} / {formatTimecode(item.durationSeconds)} ({pct}%)
+                            {formatTimecode(item.progressSeconds)} /{' '}
+                            {formatTimecode(item.durationSeconds)} ({pct}%)
                           </span>
                         </div>
                       </div>
@@ -1878,7 +2367,10 @@ export default function App() {
         {activeSection === 'offline' && (
           <section aria-labelledby="offline-heading" className="space-y-8">
             <div>
-              <h1 id="offline-heading" className="text-2xl font-bold text-slate-900 dark:text-white">
+              <h1
+                id="offline-heading"
+                className="text-2xl font-bold text-slate-900 dark:text-white"
+              >
                 Оффлайн-хранилище, Кроссплатформенность и Кибербезопасность
               </h1>
               <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
@@ -1909,16 +2401,19 @@ export default function App() {
 
               {offlineEpisodes.length === 0 ? (
                 <p className="text-xs text-slate-500 dark:text-slate-400 py-4">
-                  Нет сохранённых оффлайн-эпизодов. Нажмите «Завершить сейчас» в очереди загрузок, чтобы закэшировать серию.
+                  Здесь появятся ваши скачанные серии. Нажмите «Завершить сейчас» в очереди загрузок, чтобы закэшировать серию в оффлайн-хранилище.
                 </p>
               ) : (
                 <div className="divide-y divide-slate-200 dark:divide-slate-800">
                   {offlineEpisodes.map((ep) => {
-                    const matchedAnime =
-                      catalog.find((a) => a.id === ep.animeId) || INITIAL_ANIME_CATALOG[0];
-                    const matchedEp = matchedAnime.episodes.find(
-                      (e) => e.number === ep.episodeNumber
-                    ) || matchedAnime.episodes[0];
+                    const matchedAnime = resolveAnimeForHistoryOrTask(
+                      ep.animeId,
+                      ep.animeTitle,
+                      ep.sourceSite as SourceSite
+                    );
+                    const matchedEp =
+                      matchedAnime.episodes.find((e) => e.number === ep.episodeNumber) ||
+                      matchedAnime.episodes[0];
 
                     return (
                       <div
@@ -1935,10 +2430,13 @@ export default function App() {
                             <span aria-hidden="true">·</span>
                             <span>{ep.voiceover}</span>
                             <span aria-hidden="true">·</span>
-                            <span className="font-mono tabular-nums">{ep.quality} ({ep.sizeMB} МБ)</span>
+                            <span className="font-mono tabular-nums">
+                              {ep.quality} ({ep.sizeMB} МБ)
+                            </span>
                           </div>
                           <h3 className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
-                            {ep.animeTitle} — Серия {String(ep.episodeNumber).padStart(2, '0')}: {ep.episodeTitle}
+                            {ep.animeTitle} — Серия {String(ep.episodeNumber).padStart(2, '0')}:{' '}
+                            {ep.episodeTitle}
                           </h3>
                           <p className="text-[11px] font-mono tabular-nums text-slate-400">
                             SHA-256: {ep.sha256}
@@ -1992,7 +2490,7 @@ export default function App() {
                 </div>
                 <ul className="space-y-2.5 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
                   <li>
-                    <strong>1. Строгий белый список источников и защита от SSRF:</strong> парсер принимает только HTTPS-соединения (TLS 1.3) к официальным доменам <code>yummyanime.tv</code>, <code>animego.org</code> и <code>animevost.org</code>. Обращения к <code>localhost</code>, <code>127.0.0.1</code> и внутренним подсетям блокируются.
+                    <strong>1. Строгий белый список источников и защита от SSRF:</strong> при вводе ссылок парсер принимает только HTTPS-соединения (TLS 1.3) к официальным доменам <code>yummyanime.tv</code>, <code>animego.org</code> и <code>animevost.org</code>. Обращения к <code>localhost</code>, <code>127.0.0.1</code> и внутренним подсетям блокируются.
                   </li>
                   <li>
                     <strong>2. Защита от Command Injection и Path Traversal:</strong> при генерации скриптов загрузки для macOS (<code>.sh</code>), Windows (<code>.ps1</code>) и Android (Termux) все аргументы экранируются на уровне синтаксиса POSIX/PowerShell, а флаг <code>--no-exec</code> запрещает выполнение стороннего кода.
@@ -2033,9 +2531,10 @@ export default function App() {
                   ))}
                 </div>
                 <div className="p-3 rounded-lg bg-slate-100 dark:bg-slate-950 font-mono text-[11px] text-slate-700 dark:text-slate-300 overflow-x-auto">
-                  Активный путь: {buildTargetFilePath({
+                  Активный путь:{' '}
+                  {buildTargetFilePath({
                     platform,
-                    animeTitle: 'Клинок полуночного ронина',
+                    animeTitle: 'Чёрный клевер',
                     episodeNumber: 1,
                     voiceover: defaultVoiceover,
                     quality: defaultQuality,

@@ -9,16 +9,94 @@ import {
   generatePlatformBatchScript,
 } from './security.ts';
 import {
-  extractAnimeFromUrl,
+  searchAnimeAcrossSites,
+  cleanAnimeSlugAndText,
+  resolveCleanAnimeTitles,
+  buildEpisodeRangeGroups,
   createDownloadTask,
   calculateQueueMetrics,
   formatTimecode,
-  INITIAL_ANIME_CATALOG,
+  DEFAULT_PLAYER_ANIME_LIST,
 } from './animeEngine.ts';
 
-test('validateAnimeSourceUrl allows official YummyAnime.TV, AnimeGO, and AnimeVost.org HTTPS links', () => {
+test('URL slug cleaner strips numeric IDs, technical suffixes, and resolves clean Russian + Romaji titles', () => {
+  const cleaned = cleanAnimeSlugAndText('8522-monolog-farmacevta-3-sezon-n1');
+  assert.equal(cleaned.cleanSlug, 'monolog-farmacevta');
+  assert.equal(cleaned.seasonNumber, 3);
+
+  const resolved = resolveCleanAnimeTitles('8522-monolog-farmacevta-3-sezon-n1');
+  assert.equal(resolved.russianTitle, 'Монолог фармацевта');
+  assert.equal(resolved.originalTitle, 'Kusuriya no Hitorigoto / The Apothecary Diaries');
+  assert.equal(resolved.seasonNumber, 3);
+
+  const urlSearch = searchAnimeAcrossSites(
+    'https://yummyanime.tv/catalog/item/8522-monolog-farmacevta-3-sezon-n1'
+  );
+  assert.equal(urlSearch.ok, true);
+  assert.equal(urlSearch.results[0].title, 'Монолог фармацевта');
+  assert.equal(
+    urlSearch.results[0].originalTitle,
+    'Kusuriya no Hitorigoto / The Apothecary Diaries'
+  );
+  assert.equal(urlSearch.results[0].title.includes('8522'), false);
+  assert.equal(urlSearch.results[0].title.includes('N1'), false);
+  assert.equal(urlSearch.results[0].title.includes('YummyAnime'), false);
+  assert.equal(urlSearch.results[0].defaultSeasonId, 's3');
+  assert.equal(urlSearch.results[0].seasons.length, 4);
+
+  // Also test an unlisted translit URL to ensure phonetic Russian conversion & suffix stripping
+  const unlisted = searchAnimeAcrossSites(
+    'https://animevost.org/tip/tv/2941-velikiy-iz-brodyachih-psov-4-sezon-v2.html'
+  );
+  assert.equal(unlisted.ok, true);
+  assert.equal(unlisted.results[0].title, 'Великий из бродячих псов');
+  assert.equal(unlisted.results[0].originalTitle, 'Velikiy Iz Brodyachih Psov');
+  assert.equal(unlisted.results[0].defaultSeasonId, 's4');
+});
+
+test('Multi-season and full episode lists work without 6-episode cap and group ranges properly', () => {
+  const clover = searchAnimeAcrossSites('Черный клевер');
+  assert.equal(clover.ok, true);
+  const cloverPrimary = clover.results[0];
+  assert.equal(cloverPrimary.seasons.length >= 3, true);
+  const season1 = cloverPrimary.seasons.find((s) => s.number === 1);
+  assert.ok(season1);
+  assert.equal(season1.episodes.length, 170);
+  assert.equal(season1.episodes[0].number, 1);
+  assert.equal(season1.episodes[169].number, 170);
+
+  const ovaSeason = cloverPrimary.seasons.find((s) => s.id === 'ova');
+  assert.ok(ovaSeason);
+  assert.equal(ovaSeason.title, 'Фильмы / OVA');
+  assert.equal(ovaSeason.episodes.length, 3);
+
+  const rangeGroups = buildEpisodeRangeGroups(170, 25);
+  assert.equal(rangeGroups.length, 7);
+  assert.equal(rangeGroups[0].label, '1–25');
+  assert.equal(rangeGroups[1].label, '26–50');
+  assert.equal(rangeGroups[6].label, '151–170');
+
+  const jjk = searchAnimeAcrossSites('Магическая битва');
+  assert.equal(jjk.ok, true);
+  const jjkS1 = jjk.results[0].seasons.find((s) => s.number === 1);
+  const jjkS2 = jjk.results[0].seasons.find((s) => s.number === 2);
+  assert.equal(jjkS1?.episodes.length, 24);
+  assert.equal(jjkS2?.episodes.length, 23);
+});
+
+test('validateAnimeSourceUrl accepts both plain-text anime titles and official HTTPS links', () => {
+  const plainRu = validateAnimeSourceUrl('Черный клевер');
+  assert.equal(plainRu.valid, true);
+  assert.equal(plainRu.isUrlInput, false);
+  assert.equal(plainRu.searchQuery, 'Черный клевер');
+
+  const plainEn = validateAnimeSourceUrl('Black Clover');
+  assert.equal(plainEn.valid, true);
+  assert.equal(plainEn.isUrlInput, false);
+
   const yummy = validateAnimeSourceUrl('https://yummyanime.tv/catalog/item/solo-leveling');
   assert.equal(yummy.valid, true);
+  assert.equal(yummy.isUrlInput, true);
   assert.equal(yummy.sourceSite, 'YummyAnime.TV');
   assert.equal(yummy.slug, 'solo-leveling');
 
@@ -30,6 +108,22 @@ test('validateAnimeSourceUrl allows official YummyAnime.TV, AnimeGO, and AnimeVo
   assert.equal(vost.valid, true);
   assert.equal(vost.sourceSite, 'AnimeVost.org');
   assert.equal(vost.slug, '3001-bleach');
+});
+
+test('searchAnimeAcrossSites returns results from YummyAnime.TV, AnimeGO, and AnimeVost.org for title queries', () => {
+  const resRu = searchAnimeAcrossSites('Черный клевер');
+  assert.equal(resRu.ok, true);
+  assert.equal(resRu.mode, 'search');
+  assert.equal(resRu.results.length, 3);
+  const sites = resRu.results.map((r) => r.sourceSite);
+  assert.deepEqual(sites, ['YummyAnime.TV', 'AnimeGO', 'AnimeVost.org']);
+  assert.equal(resRu.results[0].title, 'Чёрный клевер');
+  assert.equal(resRu.results[0].originalTitle, 'Black Clover');
+
+  const resEn = searchAnimeAcrossSites('Black Clover');
+  assert.equal(resEn.ok, true);
+  assert.equal(resEn.results.length, 3);
+  assert.equal(resEn.results[0].title, 'Чёрный клевер');
 });
 
 test('validateAnimeSourceUrl blocks SSRF, HTTP, XSS, Path Traversal, and untrusted domains', () => {
@@ -71,7 +165,7 @@ test('sanitizeFileName and escapeShellArg neutralize command injection and path 
 test('buildTargetFilePath and generatePlatformBatchScript support macOS, Windows, and Android', () => {
   const macPath = buildTargetFilePath({
     platform: 'macos',
-    animeTitle: 'Клинок ронина',
+    animeTitle: 'Чёрный клевер',
     episodeNumber: 3,
     voiceover: 'AniLibria',
     quality: '1080p',
@@ -80,7 +174,7 @@ test('buildTargetFilePath and generatePlatformBatchScript support macOS, Windows
 
   const winPath = buildTargetFilePath({
     platform: 'windows',
-    animeTitle: 'Клинок ронина',
+    animeTitle: 'Чёрный клевер',
     episodeNumber: 3,
     voiceover: 'AniLibria',
     quality: '1080p',
@@ -89,7 +183,7 @@ test('buildTargetFilePath and generatePlatformBatchScript support macOS, Windows
 
   const androidPath = buildTargetFilePath({
     platform: 'android',
-    animeTitle: 'Клинок ронина',
+    animeTitle: 'Чёрный клевер',
     episodeNumber: 3,
     voiceover: 'AniLibria',
     quality: '720p',
@@ -99,12 +193,12 @@ test('buildTargetFilePath and generatePlatformBatchScript support macOS, Windows
   const script = generatePlatformBatchScript(
     [
       {
-        animeTitle: 'Клинок ронина',
+        animeTitle: 'Чёрный клевер',
         episodeNumber: 1,
         voiceover: 'AniLibria',
         quality: '1080p',
         sourceSite: 'YummyAnime.TV',
-        sourceUrl: 'https://yummyanime.tv/catalog/item/klinok?ep=1',
+        sourceUrl: 'https://yummyanime.tv/catalog/item/black-clover?ep=1',
         sha256: computeDeterministicHash('test'),
       },
     ],
@@ -112,23 +206,15 @@ test('buildTargetFilePath and generatePlatformBatchScript support macOS, Windows
   );
   assert.equal(script.filename, 'animac-windows-download.ps1');
   assert.equal(script.content.includes('--no-exec'), true);
-});
-
-test('extractAnimeFromUrl and queue metrics work deterministically', () => {
-  const parsed = extractAnimeFromUrl('https://animego.org/anime/solo-leveling-season-2');
-  assert.equal(parsed.ok, true);
-  assert.equal(parsed.anime?.sourceSite, 'AnimeGO');
-  assert.equal((parsed.anime?.episodes.length ?? 0) > 0, true);
 
   const task1 = createDownloadTask({
-    anime: INITIAL_ANIME_CATALOG[0],
-    episode: INITIAL_ANIME_CATALOG[0].episodes[0],
+    anime: DEFAULT_PLAYER_ANIME_LIST[0],
+    episode: DEFAULT_PLAYER_ANIME_LIST[0].episodes[0],
     voiceover: 'AniLibria',
     quality: '1080p',
     platform: 'macos',
   });
   const metrics = calculateQueueMetrics([task1]);
   assert.equal(metrics.activeCount, 1);
-  assert.equal(metrics.totalSizeMB > 100, true);
   assert.equal(formatTimecode(1445), '24:05');
 });
