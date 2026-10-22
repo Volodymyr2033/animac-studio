@@ -142,6 +142,7 @@ export const SOURCE_SITES_DIRECTORY: SourceSiteDirectoryInfo[] = [
 ];
 
 export const POPULAR_SEARCH_CHIPS: string[] = [
+  'О моем перерождении в слизь',
   'Человек-бензопила',
   'Магическая битва',
   'Черный клевер',
@@ -2213,10 +2214,10 @@ export function extractAnimeFromUrl(rawUrl: string): {
 }
 
 /**
- * Default player fallback series ("Чёрный клевер" across YummyAnime.TV, AnimeGO, AnimeVost.org)
+ * Default player fallback series ("Монолог фармацевта" across YummyAnime.TV, AnimeGO, AnimeVost.org)
  */
 export const DEFAULT_PLAYER_ANIME_LIST: AnimeSeries[] = buildMultiSiteResultsFromTemplate(
-  KNOWN_ANIME_DATABASE[1]
+  KNOWN_ANIME_DATABASE[0]
 );
 
 /**

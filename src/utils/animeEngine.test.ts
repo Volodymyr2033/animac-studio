@@ -58,7 +58,10 @@ test('Multi-season and full episode lists work without 6-episode cap and group r
   const clover = searchAnimeAcrossSites('Черный клевер');
   assert.equal(clover.ok, true);
   const cloverPrimary = clover.results[0];
-  assert.equal(cloverPrimary.posterUrl.startsWith('https://s4.anilist.co/'), true);
+  assert.equal(
+    cloverPrimary.posterUrl,
+    'https://cdn.myanimelist.net/images/anime/2/88336l.jpg'
+  );
   assert.equal(cloverPrimary.seasons.length >= 3, true);
   const season1 = cloverPrimary.seasons.find((s) => s.number === 1);
   assert.ok(season1);
@@ -226,13 +229,13 @@ test('Poster resolution maps Tensei shitara Slime Datta Ken accurately and never
   assert.equal(slimeSearch.results[0].title, 'О моём перерождении в слизь');
   assert.equal(
     slimeSearch.results[0].posterUrl,
-    'https://desu.shikimori.one/uploads/poster/animes/37430/main_2x-1937ff7b7ca829b3a0a383b16a246a47.webp'
+    'https://cdn.myanimelist.net/images/anime/1694/93337l.jpg'
   );
 
   const customQuery = searchAnimeAcrossSites('Волчица и пряности');
   assert.equal(customQuery.ok, true);
-  // Unlisted titles must have empty posterUrl so AnimeArtwork fetches from Shikimori API or renders neutral placeholder
+  // Unlisted titles must have empty posterUrl so AnimeArtwork fetches from Jikan API or renders neutral placeholder
   assert.equal(customQuery.results[0].posterUrl, '');
-  assert.equal(customQuery.results[0].posterUrl.includes('bx97940'), false);
+  assert.equal(customQuery.results[0].posterUrl.includes('88336l'), false);
 });
 

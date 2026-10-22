@@ -669,6 +669,7 @@ export default function App() {
             src="/icon.svg"
             alt=""
             aria-hidden="true"
+            referrerPolicy="no-referrer"
             className="w-7 h-7 rounded-lg shrink-0"
           />
           AniMac Studio
@@ -1504,7 +1505,8 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          const q = activeQueryLabel || 'Черный клевер';
+                          const q =
+                            universalInput.trim() || activeQueryLabel || 'Монолог фармацевта';
                           setUniversalInput(q);
                           executeUniversalSearch(q);
                           setSiteFilter(src.site);
@@ -1599,31 +1601,42 @@ export default function App() {
                         key={task.id}
                         className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex items-center justify-between gap-4"
                       >
-                        <div className="min-w-0 space-y-1">
-                          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                            <span className="font-semibold text-sky-600 dark:text-sky-400">
-                              {task.sourceSite}
-                            </span>
-                            {task.seasonTitle && (
-                              <>
-                                <span aria-hidden="true">·</span>
-                                <span>{task.seasonTitle}</span>
-                              </>
-                            )}
-                            <span aria-hidden="true">·</span>
-                            <span>{task.voiceover}</span>
-                            <span aria-hidden="true">·</span>
-                            <span className="font-mono tabular-nums">{task.quality}</span>
+                        <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                          <div className="w-12 h-16 rounded-lg overflow-hidden shrink-0 bg-slate-950">
+                            <AnimeArtwork
+                              title={matchedAnime.title}
+                              originalTitle={matchedAnime.originalTitle}
+                              posterUrl={matchedAnime.posterUrl}
+                              theme={matchedAnime.artworkTheme}
+                              className="w-full h-full object-cover rounded-lg"
+                            />
                           </div>
-                          <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                            {task.animeTitle} — Серия {String(task.episodeNumber).padStart(2, '0')}
-                          </h3>
-                          <p className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                            Статус:{' '}
-                            {task.status === 'completed'
-                              ? 'Готово (Оффлайн)'
-                              : `Загрузка ${task.progressPercent}%`}
-                          </p>
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                              <span className="font-semibold text-sky-600 dark:text-sky-400">
+                                {task.sourceSite}
+                              </span>
+                              {task.seasonTitle && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span>{task.seasonTitle}</span>
+                                </>
+                              )}
+                              <span aria-hidden="true">·</span>
+                              <span>{task.voiceover}</span>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono tabular-nums">{task.quality}</span>
+                            </div>
+                            <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                              {task.animeTitle} — Серия {String(task.episodeNumber).padStart(2, '0')}
+                            </h3>
+                            <p className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                              Статус:{' '}
+                              {task.status === 'completed'
+                                ? 'Готово (Оффлайн)'
+                                : `Загрузка ${task.progressPercent}%`}
+                            </p>
+                          </div>
                         </div>
 
                         <div className="flex items-center gap-2 shrink-0">
@@ -1667,29 +1680,40 @@ export default function App() {
                         key={`hist-${item.id}`}
                         className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex items-center justify-between gap-4"
                       >
-                        <div className="min-w-0 space-y-1">
-                          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                              Просмотрено
-                            </span>
-                            <span aria-hidden="true">·</span>
-                            <span>{item.sourceSite}</span>
-                            {item.seasonTitle && (
-                              <>
-                                <span aria-hidden="true">·</span>
-                                <span>{item.seasonTitle}</span>
-                              </>
-                            )}
-                            <span aria-hidden="true">·</span>
-                            <span>{item.voiceover}</span>
+                        <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                          <div className="w-12 h-16 rounded-lg overflow-hidden shrink-0 bg-slate-950">
+                            <AnimeArtwork
+                              title={matchedAnime.title}
+                              originalTitle={matchedAnime.originalTitle}
+                              posterUrl={matchedAnime.posterUrl}
+                              theme={matchedAnime.artworkTheme}
+                              className="w-full h-full object-cover rounded-lg"
+                            />
                           </div>
-                          <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                            {item.animeTitle} — Серия {String(item.episodeNumber).padStart(2, '0')}
-                          </h3>
-                          <p className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                            Таймкод: {formatTimecode(item.progressSeconds)} /{' '}
-                            {formatTimecode(item.durationSeconds)}
-                          </p>
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                              <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                                Просмотрено
+                              </span>
+                              <span aria-hidden="true">·</span>
+                              <span>{item.sourceSite}</span>
+                              {item.seasonTitle && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span>{item.seasonTitle}</span>
+                                </>
+                              )}
+                              <span aria-hidden="true">·</span>
+                              <span>{item.voiceover}</span>
+                            </div>
+                            <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                              {item.animeTitle} — Серия {String(item.episodeNumber).padStart(2, '0')}
+                            </h3>
+                            <p className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                              Таймкод: {formatTimecode(item.progressSeconds)} /{' '}
+                              {formatTimecode(item.durationSeconds)}
+                            </p>
+                          </div>
                         </div>
 
                         <button
@@ -1845,11 +1869,21 @@ export default function App() {
                       key={task.id}
                       className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
                     >
-                      <div className="space-y-1.5 flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                          <span className="font-semibold text-sky-600 dark:text-sky-400">
-                            {task.sourceSite}
-                          </span>
+                      <div className="flex items-start gap-4 flex-1 min-w-0">
+                        <div className="w-16 h-24 rounded-xl overflow-hidden shrink-0 bg-slate-950">
+                          <AnimeArtwork
+                            title={matchedAnime.title}
+                            originalTitle={matchedAnime.originalTitle}
+                            posterUrl={matchedAnime.posterUrl}
+                            theme={matchedAnime.artworkTheme}
+                            className="w-full h-full object-cover rounded-xl"
+                          />
+                        </div>
+                        <div className="space-y-1.5 flex-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span className="font-semibold text-sky-600 dark:text-sky-400">
+                              {task.sourceSite}
+                            </span>
                           {task.seasonTitle && (
                             <>
                               <span aria-hidden="true">·</span>
@@ -1896,6 +1930,7 @@ export default function App() {
                           <span>Файл: {task.targetPath}</span>
                           <span aria-hidden="true">·</span>
                           <span>SHA-256: {task.sha256.slice(0, 16)}…</span>
+                        </div>
                         </div>
                       </div>
 

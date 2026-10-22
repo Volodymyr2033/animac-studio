@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import Hls from 'hls.js';
 import {
   Play,
   Pause,
@@ -6,12 +7,15 @@ import {
   VolumeX,
   SkipForward,
   SkipBack,
-  CheckCircle2,
   Download,
   ShieldCheck,
-  Subtitles,
   FolderDown,
   Search,
+  Maximize2,
+  AlertCircle,
+  Loader2,
+  Layers,
+  ExternalLink,
 } from 'lucide-react';
 import {
   AnimeSeason,
@@ -22,6 +26,7 @@ import {
   formatTimecode,
 } from '../utils/animeEngine';
 import { VideoQuality } from '../utils/security';
+import { AnimeArtwork } from './AnimeArtwork';
 
 interface VideoPlayerViewProps {
   anime: AnimeSeries;
@@ -46,20 +51,222 @@ interface VideoPlayerViewProps {
   onQueueSeason: (anime: AnimeSeries, season: AnimeSeason) => void;
 }
 
-const SUBTITLE_LINES: Record<number, string[]> = {
-  1: [
-    '— Сигнал с ретранслятора подтверждён. Начинаем синхронизацию сектора.',
-    '— Внимание: уровень атмосферных помех превышает норму.',
-    '— Переключаю питание на резервный контур. Держите строй!',
-    '— Озвучка синхронизирована. Поток декодируется без потерь.',
-  ],
-  2: [
-    '— Мы обнаружили древний архив под обсерваторией.',
-    '— Координаты ведут к северному архипелагу.',
-    '— Время до затмения — ровно четырнадцать минут.',
-    '— Проверьте контрольную сумму ключа перед запуском.',
-  ],
+export interface AniLibriaEpisodeStream {
+  episode: number;
+  name: string;
+  durationSeconds: number;
+  hls: {
+    fhd: string | null;
+    hd: string | null;
+    sd: string | null;
+  };
+}
+
+export interface AniLibriaTitlePlayerPayload {
+  releaseId: number | string;
+  releaseTitle: string;
+  host: string;
+  episodes: AniLibriaEpisodeStream[];
+}
+
+// In-memory cache of resolved AniLibria stream manifests per anime title
+const aniLibriaStreamCache = new Map<string, AniLibriaTitlePlayerPayload>();
+
+/**
+ * Direct release ID mapping on AniLibria for popular titles where Russian/Romaji spelling varies
+ */
+const KNOWN_ANILIBRIA_RELEASE_IDS: Record<string, number> = {
+  'о моём перерождении в слизь': 8950,
+  'о моем перерождении в слизь': 8950,
+  'перерождение в слизь': 8950,
+  'слизь': 8950,
+  'tensei shitara slime datta ken': 8950,
+  'магическая битва': 8789,
+  'jujutsu kaisen': 8789,
+  'клинок, рассекающий демонов': 8325,
+  'клинок рассекающий демонов': 8325,
+  'клинок': 8325,
+  'kimetsu no yaiba': 8325,
+  'провожающая в последний путь фрирен': 9542,
+  'фрирен': 9542,
+  'sousou no frieren': 9542,
+  'поднятие уровня в одиночку': 9600,
+  'соло левелинг': 9600,
+  'solo leveling': 9600,
+  'дандадан': 9789,
+  'dandadan': 9789,
+  'семья шпиона': 9161,
+  'spy x family': 9161,
+  'звёздное дитя': 9420,
+  'звездное дитя': 9420,
+  'oshi no ko': 9420,
+  'блич: тысячелетняя кровавая война': 8452,
+  'блич': 8452,
+  'bleach': 8452,
+  'чёрный клевер': 5152,
+  'черный клевер': 5152,
+  'black clover': 5152,
 };
+
+function normalizeHlsUrl(host: string, rawPath: string | null | undefined): string | null {
+  if (!rawPath || typeof rawPath !== 'string') return null;
+  if (rawPath.startsWith('http://') || rawPath.startsWith('https://')) {
+    return rawPath;
+  }
+  const cleanHost = host.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  const cleanPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+  return `https://${cleanHost}${cleanPath}`;
+}
+
+/**
+ * Queries AniLibria API v3 (`https://api.anilibria.tv/v3/title?search=...`)
+ * and live AniLibria v1 mirror (`https://anilibria.top/api/v1/...`) to retrieve real HLS (.m3u8) streams.
+ */
+async function fetchAniLibriaPlayerData(
+  animeTitle: string,
+  originalTitle: string
+): Promise<AniLibriaTitlePlayerPayload | null> {
+  const cacheKey = `${animeTitle.toLowerCase()}::${originalTitle.toLowerCase()}`;
+  const cached = aniLibriaStreamCache.get(cacheKey);
+  if (cached) return cached;
+
+  const queriesToTry = Array.from(
+    new Set(
+      [
+        animeTitle.trim(),
+        originalTitle.split('/')[0].trim(),
+        originalTitle.split('/')[1]?.trim() || '',
+      ].filter(Boolean)
+    )
+  );
+
+  // 1. Query live AniLibria API (anilibria.top/api/v1) which serves cache.libria.fun HLS streams
+  let targetReleaseId: number | null =
+    KNOWN_ANILIBRIA_RELEASE_IDS[animeTitle.trim().toLowerCase()] ||
+    KNOWN_ANILIBRIA_RELEASE_IDS[originalTitle.split('/')[0].trim().toLowerCase()] ||
+    null;
+
+  if (!targetReleaseId) {
+    for (const q of queriesToTry) {
+      try {
+        const searchRes = await fetch(
+          `https://anilibria.top/api/v1/app/search/releases?query=${encodeURIComponent(q)}`,
+          { signal: AbortSignal.timeout(4000) }
+        );
+        if (searchRes.ok) {
+          const searchList = await searchRes.json();
+          if (Array.isArray(searchList) && searchList.length > 0 && searchList[0]?.id) {
+            targetReleaseId = Number(searchList[0].id);
+            break;
+          }
+        }
+      } catch {
+        // Ignore and try next query
+      }
+    }
+  }
+
+  if (targetReleaseId) {
+    try {
+      const releaseRes = await fetch(
+        `https://anilibria.top/api/v1/anime/releases/${targetReleaseId}`,
+        { signal: AbortSignal.timeout(4500) }
+      );
+      if (releaseRes.ok) {
+        const relData = await releaseRes.json();
+        const rawEpisodes = Array.isArray(relData?.episodes) ? relData.episodes : [];
+        const host = 'cache.libria.fun';
+
+        const episodes: AniLibriaEpisodeStream[] = rawEpisodes
+          .map((ep: Record<string, unknown>, idx: number) => {
+            const epNum = Math.round(Number(ep?.ordinal || ep?.sort_order || idx + 1));
+            const fhd = normalizeHlsUrl(host, ep?.hls_1080 as string | null);
+            const hd = normalizeHlsUrl(host, ep?.hls_720 as string | null);
+            const sd = normalizeHlsUrl(host, ep?.hls_480 as string | null);
+            return {
+              episode: epNum,
+              name:
+                typeof ep?.name === 'string' && ep.name.trim().length > 0
+                  ? ep.name
+                  : `Серия ${epNum}`,
+              durationSeconds: Number(ep?.duration) || 1440,
+              hls: {
+                fhd: fhd || hd || sd,
+                hd: hd || fhd || sd,
+                sd: sd || hd || fhd,
+              },
+            };
+          })
+          .filter((e: AniLibriaEpisodeStream) => e.hls.fhd || e.hls.hd || e.hls.sd)
+          .sort((a: AniLibriaEpisodeStream, b: AniLibriaEpisodeStream) => a.episode - b.episode);
+
+        if (episodes.length > 0) {
+          const payload: AniLibriaTitlePlayerPayload = {
+            releaseId: targetReleaseId,
+            releaseTitle: relData?.name?.main || animeTitle,
+            host,
+            episodes,
+          };
+          aniLibriaStreamCache.set(cacheKey, payload);
+          return payload;
+        }
+      }
+    } catch {
+      // Proceed to v3 fallback if v1 release details failed
+    }
+  }
+
+  // 2. Fallback to AniLibria API v3 endpoint: https://api.anilibria.tv/v3/title?search=${encodeURIComponent(animeTitle)}
+  for (const q of queriesToTry) {
+    try {
+      const v3Res = await fetch(
+        `https://api.anilibria.tv/v3/title?search=${encodeURIComponent(q)}`,
+        { signal: AbortSignal.timeout(3000) }
+      );
+      if (v3Res.ok) {
+        const v3Data = await v3Res.json();
+        const titleObj = Array.isArray(v3Data?.list) ? v3Data.list[0] : v3Data;
+        const host = titleObj?.player?.host || 'cache.libria.fun';
+        const rawList = titleObj?.player?.list;
+        if (rawList && typeof rawList === 'object') {
+          const entries = Array.isArray(rawList) ? rawList : Object.values(rawList);
+          const episodes: AniLibriaEpisodeStream[] = entries
+            .map((ep: Record<string, unknown>, idx: number) => {
+              const hlsObj = (ep?.hls || {}) as Record<string, string | null>;
+              const epNum = Number(ep?.episode || ep?.ordinal || idx + 1);
+              return {
+                episode: epNum,
+                name: typeof ep?.name === 'string' && ep.name ? ep.name : `Серия ${epNum}`,
+                durationSeconds: 1440,
+                hls: {
+                  fhd: normalizeHlsUrl(host, hlsObj.fhd),
+                  hd: normalizeHlsUrl(host, hlsObj.hd),
+                  sd: normalizeHlsUrl(host, hlsObj.sd),
+                },
+              };
+            })
+            .filter((e) => e.hls.fhd || e.hls.hd || e.hls.sd)
+            .sort((a, b) => a.episode - b.episode);
+
+          if (episodes.length > 0) {
+            const payload: AniLibriaTitlePlayerPayload = {
+              releaseId: titleObj.id || q,
+              releaseTitle: titleObj?.names?.ru || animeTitle,
+              host,
+              episodes,
+            };
+            aniLibriaStreamCache.set(cacheKey, payload);
+            return payload;
+          }
+        }
+      }
+    } catch {
+      // Ignore network/CORS errors on fallback
+    }
+  }
+
+  return null;
+}
 
 export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   anime,
@@ -77,51 +284,182 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   onQueueEpisode,
   onQueueSeason,
 }) => {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(initialProgressSeconds || 0);
-  const [isMuted, setIsMuted] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const playerContainerRef = useRef<HTMLDivElement | null>(null);
+  const hlsInstanceRef = useRef<Hls | null>(null);
+  const resumeTimeRef = useRef<number>(initialProgressSeconds || 0);
+
+  const [isLoadingStream, setIsLoadingStream] = useState<boolean>(true);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [playerData, setPlayerData] = useState<AniLibriaTitlePlayerPayload | null>(null);
+
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [currentTime, setCurrentTime] = useState<number>(initialProgressSeconds || 0);
+  const [duration, setDuration] = useState<number>(episode.durationSeconds || 1440);
+  const [volume, setVolume] = useState<number>(1);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
-  const [showSubtitles, setShowSubtitles] = useState(true);
-  const [activeRangeIndex, setActiveRangeIndex] = useState(0);
-  const [episodeNumberFilter, setEpisodeNumberFilter] = useState('');
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const isPlayingRef = useRef(isPlaying);
-  const currentTimeRef = useRef(currentTime);
-  const playbackRateRef = useRef(playbackRate);
+  const [activeRangeIndex, setActiveRangeIndex] = useState<number>(0);
+  const [episodeNumberFilter, setEpisodeNumberFilter] = useState<string>('');
 
+  // Fetch real AniLibria HLS streams when anime changes
   useEffect(() => {
-    isPlayingRef.current = isPlaying;
-  }, [isPlaying]);
+    let cancelled = false;
+    setIsLoadingStream(true);
+    setStreamError(null);
 
-  useEffect(() => {
-    currentTimeRef.current = currentTime;
-  }, [currentTime]);
+    fetchAniLibriaPlayerData(anime.title, anime.originalTitle).then((data) => {
+      if (cancelled) return;
+      if (!data || data.episodes.length === 0) {
+        setPlayerData(null);
+        setStreamError('Видеопоток для данного тайтла не найден в каталоге AniLibria');
+        setIsLoadingStream(false);
+        return;
+      }
+      setPlayerData(data);
+      setStreamError(null);
+      setIsLoadingStream(false);
+    });
 
-  useEffect(() => {
-    playbackRateRef.current = playbackRate;
-  }, [playbackRate]);
+    return () => {
+      cancelled = true;
+    };
+  }, [anime.id, anime.title, anime.originalTitle]);
 
+  // Match the selected episode to the real AniLibria episode stream
+  const activeStreamEpisode: AniLibriaEpisodeStream | null = useMemo(() => {
+    if (!playerData || playerData.episodes.length === 0) return null;
+    return (
+      playerData.episodes.find((e) => e.episode === episode.number) ||
+      playerData.episodes[(episode.number - 1) % playerData.episodes.length] ||
+      playerData.episodes[0]
+    );
+  }, [playerData, episode.number]);
+
+  // Select the HLS .m3u8 URL based on requested video quality (1080p -> hls.fhd, 720p -> hls.hd, 480p -> hls.sd)
+  const activeStreamUrl: string | null = useMemo(() => {
+    if (!activeStreamEpisode) return null;
+    if (quality === '2160p' || quality === '1080p') {
+      return (
+        activeStreamEpisode.hls.fhd ||
+        activeStreamEpisode.hls.hd ||
+        activeStreamEpisode.hls.sd
+      );
+    }
+    if (quality === '720p') {
+      return (
+        activeStreamEpisode.hls.hd ||
+        activeStreamEpisode.hls.fhd ||
+        activeStreamEpisode.hls.sd
+      );
+    }
+    return (
+      activeStreamEpisode.hls.sd ||
+      activeStreamEpisode.hls.hd ||
+      activeStreamEpisode.hls.fhd
+    );
+  }, [activeStreamEpisode, quality]);
+
+  // Attach hls.js or native HLS to the HTML5 <video> element whenever stream URL changes
   useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !activeStreamUrl) return;
+
+    if (hlsInstanceRef.current) {
+      hlsInstanceRef.current.destroy();
+      hlsInstanceRef.current = null;
+    }
+
+    const savedTime = resumeTimeRef.current;
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+      });
+      hlsInstanceRef.current = hls;
+      hls.loadSource(activeStreamUrl);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (savedTime > 0 && savedTime < (video.duration || 1440)) {
+          video.currentTime = savedTime;
+        }
+      });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hls.recoverMediaError();
+              break;
+            default:
+              hls.destroy();
+              break;
+          }
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS support on macOS Safari & iOS
+      video.src = activeStreamUrl;
+      video.addEventListener(
+        'loadedmetadata',
+        () => {
+          if (savedTime > 0 && savedTime < (video.duration || 1440)) {
+            video.currentTime = savedTime;
+          }
+        },
+        { once: true }
+      );
+    } else {
+      video.src = activeStreamUrl;
+    }
+
+    return () => {
+      if (hlsInstanceRef.current) {
+        hlsInstanceRef.current.destroy();
+        hlsInstanceRef.current = null;
+      }
+    };
+  }, [activeStreamUrl]);
+
+  // Reset resume time when switching episodes
+  useEffect(() => {
+    resumeTimeRef.current = initialProgressSeconds || 0;
     setCurrentTime(initialProgressSeconds || 0);
+    setIsPlaying(false);
   }, [anime.id, season.id, episode.number, initialProgressSeconds]);
 
-  // Keep range group synced when episode changes
+  // Merge episode list: use real AniLibria episode titles when available
+  const effectiveSeasonEpisodes: EpisodeInfo[] = useMemo(() => {
+    if (playerData && playerData.episodes.length > 0 && season.number === 1) {
+      return season.episodes.map((ep) => {
+        const realEp = playerData.episodes.find((r) => r.episode === ep.number);
+        if (realEp) {
+          return {
+            ...ep,
+            title: realEp.name || ep.title,
+            durationSeconds: realEp.durationSeconds || ep.durationSeconds,
+          };
+        }
+        return ep;
+      });
+    }
+    return season.episodes;
+  }, [season, playerData]);
+
   const rangeGroups = useMemo(
-    () => buildEpisodeRangeGroups(season.episodes.length, 25),
-    [season.episodes.length]
+    () => buildEpisodeRangeGroups(effectiveSeasonEpisodes.length, 25),
+    [effectiveSeasonEpisodes.length]
   );
 
   useEffect(() => {
     const idx = rangeGroups.findIndex(
       (g) => episode.number >= g.start && episode.number <= g.end
     );
-    if (idx >= 0) {
-      setActiveRangeIndex(idx);
-    } else {
-      setActiveRangeIndex(0);
-    }
+    setActiveRangeIndex(idx >= 0 ? idx : 0);
   }, [season.id, episode.number, rangeGroups]);
 
   const displayedEpisodes = useMemo(() => {
@@ -129,242 +467,236 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     if (cleanFilter) {
       const targetNum = Number(cleanFilter);
       if (!Number.isNaN(targetNum) && targetNum > 0) {
-        return season.episodes.filter(
+        return effectiveSeasonEpisodes.filter(
           (ep) =>
             ep.number === targetNum ||
             String(ep.number).startsWith(cleanFilter)
         );
       }
       const lower = cleanFilter.toLowerCase();
-      return season.episodes.filter(
+      return effectiveSeasonEpisodes.filter(
         (ep) =>
           String(ep.number).includes(lower) ||
           ep.title.toLowerCase().includes(lower)
       );
     }
     const group = rangeGroups[activeRangeIndex] || rangeGroups[0];
-    if (!group) return season.episodes;
-    return season.episodes.filter(
+    if (!group) return effectiveSeasonEpisodes;
+    return effectiveSeasonEpisodes.filter(
       (ep) => ep.number >= group.start && ep.number <= group.end
     );
-  }, [season.episodes, rangeGroups, activeRangeIndex, episodeNumberFilter]);
+  }, [effectiveSeasonEpisodes, rangeGroups, activeRangeIndex, episodeNumberFilter]);
 
-  // Ambient Web Audio synthesizer when playing
-  useEffect(() => {
-    if (!isPlaying || isMuted) {
-      if (audioCtxRef.current && audioCtxRef.current.state === 'running') {
-        audioCtxRef.current.suspend().catch(() => {});
-      }
-      return;
-    }
+  const currentIdx = effectiveSeasonEpisodes.findIndex((e) => e.number === episode.number);
+  const prevEp = currentIdx > 0 ? effectiveSeasonEpisodes[currentIdx - 1] : null;
+  const nextEp =
+    currentIdx >= 0 && currentIdx < effectiveSeasonEpisodes.length - 1
+      ? effectiveSeasonEpisodes[currentIdx + 1]
+      : null;
 
+  const togglePlay = async () => {
+    const video = videoRef.current;
+    if (!video || !activeStreamUrl) return;
     try {
-      const AudioContextClass =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (!audioCtxRef.current && AudioContextClass) {
-        const ctx = new AudioContextClass();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.value = 196;
-        gain.gain.value = 0.015;
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        audioCtxRef.current = ctx;
-      } else if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
-        audioCtxRef.current.resume().catch(() => {});
+      if (video.paused) {
+        await video.play();
+        setIsPlaying(true);
+      } else {
+        video.pause();
+        setIsPlaying(false);
       }
     } catch {
-      // Ignore Web Audio autoplay blocks in headless browsers
+      // Autoplay or stream interrupted
     }
-
-    return () => {
-      if (audioCtxRef.current && audioCtxRef.current.state === 'running') {
-        audioCtxRef.current.suspend().catch(() => {});
-      }
-    };
-  }, [isPlaying, isMuted]);
-
-  // Playback timer and watch history auto-sync
-  useEffect(() => {
-    if (!isPlaying) return;
-    const interval = setInterval(() => {
-      setCurrentTime((prev) => {
-        const next = Math.min(episode.durationSeconds, prev + 1 * playbackRateRef.current);
-        onUpdateProgress(Math.floor(next), episode.durationSeconds);
-        if (next >= episode.durationSeconds) {
-          setIsPlaying(false);
-        }
-        return next;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isPlaying, episode.durationSeconds, onUpdateProgress]);
-
-  // Render animated anime scene on Canvas (respecting headless browser throttling per ultra-mode rules)
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const isHeadless =
-      navigator.webdriver || /HeadlessChrome/i.test(navigator.userAgent);
-
-    let animId = 0;
-    let frameCount = 0;
-
-    const drawFrame = () => {
-      frameCount++;
-      const w = canvas.width;
-      const h = canvas.height;
-      const t = currentTimeRef.current + (isPlayingRef.current ? frameCount * 0.03 : 0);
-
-      const grad = ctx.createLinearGradient(0, 0, 0, h);
-      if (anime.artworkTheme === 'samurai' || anime.artworkTheme === 'shrine') {
-        grad.addColorStop(0, '#090D16');
-        grad.addColorStop(0.6, '#1E1B4B');
-        grad.addColorStop(1, '#7C2D12');
-      } else if (anime.artworkTheme === 'mecha' || anime.artworkTheme === 'cyber') {
-        grad.addColorStop(0, '#020617');
-        grad.addColorStop(0.6, '#0F172A');
-        grad.addColorStop(1, '#0369A1');
-      } else {
-        grad.addColorStop(0, '#0C192C');
-        grad.addColorStop(0.6, '#1E3A5F');
-        grad.addColorStop(1, '#0E7490');
-      }
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, w, h);
-
-      const moonX = w * 0.72 + Math.sin(t * 0.4) * 18;
-      const moonY = h * 0.34;
-      ctx.fillStyle = 'rgba(253, 224, 71, 0.22)';
-      ctx.beginPath();
-      ctx.arc(moonX, moonY, 68, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = 'rgba(251, 191, 36, 0.78)';
-      ctx.beginPath();
-      ctx.arc(moonX, moonY, 44, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = '#090D16';
-      ctx.beginPath();
-      ctx.moveTo(0, h);
-      for (let x = 0; x <= w; x += 40) {
-        const ridge = h * 0.72 - Math.abs(Math.sin((x + t * 12) * 0.015)) * 48;
-        ctx.lineTo(x, ridge);
-      }
-      ctx.lineTo(w, h);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.68)';
-      ctx.fillRect(20, 20, 420, 54);
-      ctx.fillStyle = '#F8FAFC';
-      ctx.font = '600 14px "Plus Jakarta Sans", sans-serif';
-      ctx.fillText(`${anime.title} · ${season.title} — Серия ${episode.number}`, 32, 42);
-      ctx.fillStyle = '#38BDF8';
-      ctx.font = '500 12px "JetBrains Mono", monospace';
-      ctx.fillText(`Озвучка: ${voiceover} · Поток ${quality} · ${anime.sourceSite}`, 32, 61);
-    };
-
-    drawFrame();
-
-    if (isPlaying) {
-      const intervalMs = isHeadless ? 120 : 40;
-      const timer = window.setInterval(drawFrame, intervalMs);
-      return () => window.clearInterval(timer);
-    }
-
-    return () => {
-      if (animId) cancelAnimationFrame(animId);
-    };
-  }, [anime, season, episode, voiceover, quality, isPlaying]);
-
-  const lines = SUBTITLE_LINES[episode.number] || SUBTITLE_LINES[1];
-  const currentSubtitle = lines[Math.floor(currentTime / 6) % lines.length];
-
-  const currentIdx = season.episodes.findIndex((e) => e.number === episode.number);
-  const prevEp = currentIdx > 0 ? season.episodes[currentIdx - 1] : null;
-  const nextEp =
-    currentIdx >= 0 && currentIdx < season.episodes.length - 1
-      ? season.episodes[currentIdx + 1]
-      : null;
+  };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = Number(e.target.value);
     setCurrentTime(val);
-    onUpdateProgress(Math.floor(val), episode.durationSeconds);
+    resumeTimeRef.current = val;
+    if (videoRef.current) {
+      videoRef.current.currentTime = val;
+    }
+    onUpdateProgress(Math.floor(val), Math.floor(duration));
   };
 
-  const togglePlay = () => {
-    const nextState = !isPlaying;
-    setIsPlaying(nextState);
-    if (nextState) {
-      const nextTime = Math.min(episode.durationSeconds, Math.max(1, currentTime + 15));
-      setCurrentTime(nextTime);
-      onUpdateProgress(Math.floor(nextTime), episode.durationSeconds);
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const nextVol = Number(e.target.value);
+    setVolume(nextVol);
+    setIsMuted(nextVol === 0);
+    if (videoRef.current) {
+      videoRef.current.volume = nextVol;
+      videoRef.current.muted = nextVol === 0;
+    }
+  };
+
+  const toggleMute = () => {
+    const nextMuted = !isMuted;
+    setIsMuted(nextMuted);
+    if (videoRef.current) {
+      videoRef.current.muted = nextMuted;
+    }
+  };
+
+  const handleSpeedChange = (nextRate: number) => {
+    setPlaybackRate(nextRate);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = nextRate;
+    }
+  };
+
+  const handleFullscreen = () => {
+    const video = videoRef.current;
+    const container = playerContainerRef.current;
+    if (video && 'webkitEnterFullscreen' in video) {
+      (video as unknown as { webkitEnterFullscreen: () => void }).webkitEnterFullscreen();
+      return;
+    }
+    if (container && container.requestFullscreen) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      } else {
+        container.requestFullscreen().catch(() => {});
+      }
+    }
+  };
+
+  const handleDirectVideoDownload = () => {
+    onQueueEpisode(anime, episode, voiceover, quality, season.title);
+    if (activeStreamUrl) {
+      const a = document.createElement('a');
+      a.href = activeStreamUrl;
+      a.download = `${anime.title} - Серия ${episode.number} [${quality}].m3u8`;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* Main Video Stage */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 overflow-hidden">
-        <div className="relative aspect-video w-full bg-slate-950 flex items-center justify-center">
-          <canvas
-            ref={canvasRef}
-            width={960}
-            height={540}
-            data-testid="anime-video-canvas"
-            className="w-full h-full object-cover"
-          />
-
-          {/* Top-right status indicator */}
-          <div className="absolute top-4 right-4 flex items-center gap-3 bg-slate-950/80 border border-slate-800 px-3 py-1.5 rounded-lg text-xs text-slate-200">
-            <span className="inline-flex items-center gap-1.5 text-emerald-400 font-medium">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              TLS 1.3
-            </span>
-            <span aria-hidden="true">·</span>
-            <span>
-              {isOfflineCached
-                ? 'Воспроизведение из оффлайн-памяти'
-                : `Источник: ${anime.sourceSite}`}
-            </span>
+      {/* Anime Info Card with Real Poster inside Player */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="w-16 h-24 shrink-0 rounded-xl overflow-hidden bg-slate-900">
+            <AnimeArtwork
+              title={anime.title}
+              originalTitle={anime.originalTitle}
+              posterUrl={anime.posterUrl}
+              className="w-full h-full object-cover rounded-xl"
+            />
           </div>
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span className="font-semibold text-sky-600 dark:text-sky-400">
+                AniLibria HLS Stream
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>Хост: {playerData?.host || 'cache.libria.fun'}</span>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono">{quality}</span>
+            </div>
+            <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white truncate">
+              {anime.title} — {season.title}, Серия {episode.number}
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+              {activeStreamEpisode?.name || episode.title} · {anime.originalTitle}
+            </p>
+          </div>
+        </div>
 
-          {/* Subtitles overlay */}
-          {showSubtitles && (
-            <div className="absolute bottom-20 inset-x-8 flex justify-center pointer-events-none">
-              <p className="px-4 py-2 rounded-lg bg-black/80 text-white text-sm md:text-base font-medium text-center max-w-2xl">
-                [{voiceover}] {currentSubtitle}
+        {activeStreamUrl && (
+          <a
+            href={activeStreamUrl}
+            download={`${anime.title}_Ep${episode.number}_${quality}.m3u8`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => onQueueEpisode(anime, episode, voiceover, quality, season.title)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Download className="w-4 h-4" />
+            Скачать серию ({quality})
+          </a>
+        )}
+      </div>
+
+      {/* Main Real HTML5 Video Stage */}
+      <div
+        ref={playerContainerRef}
+        className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 overflow-hidden"
+      >
+        <div className="relative aspect-video max-h-[520px] w-full bg-black flex items-center justify-center overflow-hidden">
+          {isLoadingStream ? (
+            <div className="flex flex-col items-center justify-center gap-3 text-slate-300 p-6 text-center">
+              <Loader2 className="w-8 h-8 text-sky-500 animate-spin" />
+              <p className="text-sm font-medium">
+                Подключение к видеопотоку AniLibria ({anime.title})…
               </p>
             </div>
-          )}
-
-          {/* Center Play Button Overlay when paused */}
-          {!isPlaying && (
-            <button
-              type="button"
-              onClick={togglePlay}
-              aria-label="Запустить воспроизведение серии"
-              className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-sky-600/95 hover:bg-sky-500 text-white flex items-center justify-center shadow-lg transition-transform hover:scale-105 cursor-pointer"
+          ) : streamError || !activeStreamUrl ? (
+            <div
+              role="alert"
+              data-testid="anilibria-stream-error"
+              className="flex flex-col items-center justify-center gap-3 text-center p-8 max-w-lg"
             >
-              <Play className="w-7 h-7 fill-current ml-0.5" />
-            </button>
+              <AlertCircle className="w-10 h-10 text-amber-400 shrink-0" />
+              <p className="text-base font-bold text-white">
+                {streamError || 'Видеопоток для данного тайтла не найден в каталоге AniLibria'}
+              </p>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Для тайтла «{anime.title}» в открытом API AniLibria отсутствует прямой HLS-поток. Выберите другой релиз или проверьте наличие озвучки AniLibria.
+              </p>
+            </div>
+          ) : (
+            <>
+              <video
+                ref={videoRef}
+                data-testid="real-html5-video-player"
+                controls
+                playsInline
+                poster={anime.posterUrl || undefined}
+                className="w-full h-full max-h-[520px] object-contain bg-black"
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+                onLoadedMetadata={(e) => {
+                  const vid = e.currentTarget;
+                  if (vid.duration && Number.isFinite(vid.duration)) {
+                    setDuration(vid.duration);
+                  }
+                }}
+                onTimeUpdate={(e) => {
+                  const vid = e.currentTarget;
+                  const now = vid.currentTime;
+                  const dur =
+                    vid.duration && Number.isFinite(vid.duration)
+                      ? vid.duration
+                      : episode.durationSeconds;
+                  setCurrentTime(now);
+                  resumeTimeRef.current = now;
+                  onUpdateProgress(Math.floor(now), Math.floor(dur));
+                }}
+              />
+
+              {/* Top-right stream badge */}
+              <div className="absolute top-4 right-4 pointer-events-none hidden sm:flex items-center gap-2 bg-slate-950/85 border border-slate-800 px-3 py-1.5 rounded-lg text-xs text-slate-200">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                <span>
+                  {isOfflineCached
+                    ? 'Оффлайн-кэш'
+                    : `HLS ${quality} · ${playerData?.host || 'cache.libria.fun'}`}
+                </span>
+              </div>
+            </>
           )}
         </div>
 
-        {/* Player Controls Bar */}
+        {/* Custom Transport & Quality Controls Bar synced with HTML5 <video> */}
         <div className="p-4 bg-slate-900 border-t border-slate-800 space-y-3">
           {/* Timeline Scrubber */}
           <div className="flex items-center gap-3">
-            <span className="text-xs font-mono tabular-nums text-slate-300 w-12">
+            <span className="text-xs font-mono tabular-nums text-slate-300 w-14">
               {formatTimecode(currentTime)}
             </span>
             <label htmlFor="player-timeline-range" className="sr-only">
@@ -374,23 +706,25 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
               id="player-timeline-range"
               type="range"
               min={0}
-              max={episode.durationSeconds}
+              max={Math.max(1, Math.floor(duration))}
               value={Math.floor(currentTime)}
+              disabled={!activeStreamUrl}
               onChange={handleSeek}
-              className="flex-1 accent-sky-500 h-1.5 bg-slate-700 rounded-lg cursor-pointer"
+              className="flex-1 accent-sky-500 h-1.5 bg-slate-700 rounded-lg cursor-pointer disabled:opacity-40"
             />
-            <span className="text-xs font-mono tabular-nums text-slate-400 w-12 text-right">
-              {formatTimecode(episode.durationSeconds)}
+            <span className="text-xs font-mono tabular-nums text-slate-400 w-14 text-right">
+              {formatTimecode(duration)}
             </span>
           </div>
 
           {/* Primary Transport & Track Controls */}
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
+                disabled={!activeStreamUrl}
                 onClick={togglePlay}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                 {isPlaying ? 'Пауза' : 'Смотреть'}
@@ -416,33 +750,44 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                 <SkipForward className="w-4 h-4" />
               </button>
 
-              <button
-                type="button"
-                onClick={() => setIsMuted(!isMuted)}
-                aria-label={isMuted ? 'Включить звук' : 'Выключить звук'}
-                className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 cursor-pointer"
-              >
-                {isMuted ? (
-                  <VolumeX className="w-4 h-4 text-rose-400" />
-                ) : (
-                  <Volume2 className="w-4 h-4" />
-                )}
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={toggleMute}
+                  aria-label={isMuted ? 'Включить звук' : 'Выключить звук'}
+                  className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 cursor-pointer"
+                >
+                  {isMuted ? (
+                    <VolumeX className="w-4 h-4 text-rose-400" />
+                  ) : (
+                    <Volume2 className="w-4 h-4" />
+                  )}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={isMuted ? 0 : volume}
+                  onChange={handleVolumeChange}
+                  aria-label="Громкость"
+                  className="w-20 accent-sky-500 h-1 bg-slate-700 rounded-lg cursor-pointer"
+                />
+              </div>
 
               <button
                 type="button"
-                onClick={() => setShowSubtitles(!showSubtitles)}
-                aria-label="Переключить субтитры"
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                  showSubtitles ? 'bg-slate-800 text-sky-400' : 'text-slate-400 hover:text-white'
-                }`}
+                disabled={!activeStreamUrl}
+                onClick={handleFullscreen}
+                aria-label="Полноэкранный режим"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
               >
-                <Subtitles className="w-4 h-4" />
-                Субтитры
+                <Maximize2 className="w-3.5 h-3.5" />
+                Во весь экран
               </button>
             </div>
 
-            {/* Studio Voiceover, Video Quality & Speed Selectors */}
+            {/* Studio Voiceover, Video Quality, Speed & Direct Download */}
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-2">
                 <label
@@ -475,7 +820,12 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                 <select
                   id="player-quality-select"
                   value={quality}
-                  onChange={(e) => onChangeQuality(e.target.value as VideoQuality)}
+                  onChange={(e) => {
+                    if (videoRef.current) {
+                      resumeTimeRef.current = videoRef.current.currentTime;
+                    }
+                    onChangeQuality(e.target.value as VideoQuality);
+                  }}
                   className="bg-slate-800 border border-slate-700 text-slate-100 text-xs font-mono rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 >
                   {VIDEO_QUALITIES.map((q) => (
@@ -496,7 +846,7 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                 <select
                   id="player-speed-select"
                   value={String(playbackRate)}
-                  onChange={(e) => setPlaybackRate(Number(e.target.value))}
+                  onChange={(e) => handleSpeedChange(Number(e.target.value))}
                   className="bg-slate-800 border border-slate-700 text-slate-100 text-xs font-mono rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 >
                   <option value="0.75">0.75x</option>
@@ -509,7 +859,7 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => onQueueEpisode(anime, episode, voiceover, quality, season.title)}
+                onClick={handleDirectVideoDownload}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 <Download className="w-3.5 h-3.5 text-sky-400" />
@@ -517,202 +867,165 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
               </button>
             </div>
           </div>
+
+          {activeStreamUrl && (
+            <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-400">
+              <span className="truncate max-w-2xl">
+                Поток HLS ({quality}): {activeStreamUrl}
+              </span>
+              <a
+                href={activeStreamUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-sky-400 hover:underline shrink-0"
+              >
+                Прямая ссылка на поток <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Episode Matrix & Details */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Список эпизодов · {anime.title} ({season.title} — {season.episodes.length} сер.)
-              </h3>
-              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                {season.subtitle
-                  ? `${season.subtitle} · Выберите сезон, диапазон или номер серии`
-                  : 'Выберите сезон и эпизод для воспроизведения или скачивания'}
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => onQueueSeason(anime, season)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0 self-start"
-            >
-              <FolderDown className="w-3.5 h-3.5" />
-              Скачать весь сезон ({season.episodes.length} сер.)
-            </button>
+      {/* Season & Full Episode Selector Panel */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Выбор сезона в плеере">
+            <span className="text-xs font-semibold text-slate-600 dark:text-slate-400 inline-flex items-center gap-1 mr-1">
+              <Layers className="w-3.5 h-3.5 text-sky-500" />
+              Сезоны:
+            </span>
+            {anime.seasons.map((s) => {
+              const active = s.id === season.id;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => onSelectSeason(s)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
+                    active
+                      ? 'bg-sky-600 text-white border-sky-600'
+                      : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-sky-500'
+                  }`}
+                >
+                  {s.title} ({s.episodes.length} сер.)
+                </button>
+              );
+            })}
           </div>
 
-          {/* Season Switcher Tabs */}
-          {anime.seasons.length > 1 && (
-            <div
-              role="tablist"
-              aria-label="Выбор сезона в плеере"
-              className="flex flex-wrap items-center gap-1.5 pt-1"
-            >
-              {anime.seasons.map((s) => {
-                const isActive = s.id === season.id;
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={isActive}
-                    onClick={() => {
-                      setEpisodeNumberFilter('');
-                      onSelectSeason(s);
-                    }}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                      isActive
-                        ? 'bg-sky-600 text-white border-sky-600'
-                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-sky-500'
-                    }`}
-                  >
-                    {s.title} ({s.episodes.length} сер.)
-                  </button>
-                );
-              })}
+          <button
+            type="button"
+            onClick={() => onQueueSeason(anime, season)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap self-start sm:self-auto"
+          >
+            <FolderDown className="w-3.5 h-3.5 text-sky-500" />
+            Скачать весь сезон ({effectiveSeasonEpisodes.length} сер.)
+          </button>
+        </div>
+
+        {/* Range Grouping & Episode Number Search if > 24 episodes */}
+        {effectiveSeasonEpisodes.length > 24 && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400 mr-1">
+                Диапазон серий:
+              </span>
+              {rangeGroups.map((grp, rIdx) => (
+                <button
+                  key={grp.label}
+                  type="button"
+                  onClick={() => {
+                    setActiveRangeIndex(rIdx);
+                    setEpisodeNumberFilter('');
+                  }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold transition-colors cursor-pointer ${
+                    activeRangeIndex === rIdx && !episodeNumberFilter.trim()
+                      ? 'bg-sky-600 text-white'
+                      : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-sky-500'
+                  }`}
+                >
+                  {grp.label}
+                </button>
+              ))}
             </div>
-          )}
 
-          {/* Range Grouping & Episode Number Search when > 24 episodes */}
-          {season.episodes.length > 24 && (
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mr-1">
-                  Диапазон серий:
-                </span>
-                {rangeGroups.map((group, idx) => (
-                  <button
-                    key={group.label}
-                    type="button"
-                    onClick={() => {
-                      setEpisodeNumberFilter('');
-                      setActiveRangeIndex(idx);
-                    }}
-                    className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold transition-colors cursor-pointer ${
-                      activeRangeIndex === idx && !episodeNumberFilter
-                        ? 'bg-sky-600 text-white'
-                        : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-sky-500'
-                    }`}
-                  >
-                    {group.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="relative sm:w-48 shrink-0">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={episodeNumberFilter}
-                  onChange={(e) => setEpisodeNumberFilter(e.target.value)}
-                  placeholder={`Поиск № (1–${season.episodes.length})`}
-                  aria-label="Поиск по номеру серии"
-                  className="w-full pl-8 pr-2.5 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100"
-                />
-              </div>
+            <div className="relative sm:w-56">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={episodeNumberFilter}
+                onChange={(e) => setEpisodeNumberFilter(e.target.value)}
+                placeholder={`Номер серии (1–${effectiveSeasonEpisodes.length})`}
+                aria-label="Поиск серии по номеру в плеере"
+                className="w-full pl-8 pr-2.5 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100"
+              />
             </div>
-          )}
+          </div>
+        )}
 
-          <div className="divide-y divide-slate-200 dark:divide-slate-800 max-h-[440px] overflow-y-auto pr-1">
+        {/* Quick Episode Number Buttons (1, 2, 3...) */}
+        <div className="space-y-2">
+          <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+            Быстрый выбор серии ({effectiveSeasonEpisodes.length} доступно):
+          </span>
+          <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1">
             {displayedEpisodes.map((ep) => {
               const isCurrent = ep.number === episode.number;
               return (
-                <div
+                <button
                   key={ep.number}
-                  className={`py-2.5 px-3 flex items-center justify-between gap-4 rounded-lg transition-colors ${
+                  type="button"
+                  onClick={() => onSelectEpisode(ep)}
+                  className={`min-w-[38px] px-2.5 py-1.5 rounded-lg text-xs font-mono font-semibold border transition-colors cursor-pointer ${
                     isCurrent
-                      ? 'bg-sky-50/80 dark:bg-sky-950/40'
-                      : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                      ? 'bg-sky-600 text-white border-sky-600'
+                      : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-sky-500'
                   }`}
                 >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono tabular-nums font-semibold text-sky-600 dark:text-sky-400">
-                        Серия {String(ep.number).padStart(2, '0')}
-                      </span>
-                      <span aria-hidden="true" className="text-slate-400">
-                        ·
-                      </span>
-                      <span className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
-                        {ep.title}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                      Длительность: {formatTimecode(ep.durationSeconds)} · Выход: {ep.releaseDate}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => onSelectEpisode(ep)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-                        isCurrent
-                          ? 'bg-sky-600 text-white'
-                          : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'
-                      }`}
-                    >
-                      {isCurrent ? 'Сейчас в плеере' : 'Смотреть'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onQueueEpisode(anime, ep, voiceover, quality, season.title)
-                      }
-                      aria-label={`Скачать серию ${ep.number}`}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap"
-                    >
-                      В очередь
-                    </button>
-                  </div>
-                </div>
+                  {ep.number}
+                </button>
               );
             })}
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4 self-start">
-          <h3 className="text-base font-bold text-slate-900 dark:text-white">
-            Параметры потока и защита
-          </h3>
-          <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-            {anime.synopsis}
-          </p>
-          <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2 text-xs">
-            <div className="flex justify-between">
-              <span className="text-slate-500 dark:text-slate-400">Источник:</span>
-              <span className="font-medium text-slate-900 dark:text-slate-100">
-                {anime.sourceSite}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500 dark:text-slate-400">Активный сезон:</span>
-              <span className="font-medium text-slate-900 dark:text-slate-100">
-                {season.title} ({season.episodes.length} сер.)
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500 dark:text-slate-400">Выбранная студия:</span>
-              <span className="font-medium text-slate-900 dark:text-slate-100">{voiceover}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500 dark:text-slate-400">Разрешение видео:</span>
-              <span className="font-mono tabular-nums font-medium text-slate-900 dark:text-slate-100">
-                {quality}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500 dark:text-slate-400">Статус оффлайн-кэша:</span>
-              <span className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                {isOfflineCached ? 'Сохранено локально' : 'Потоковый буфер'}
-              </span>
-            </div>
-          </div>
+        {/* Detailed Episode List Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-72 overflow-y-auto pr-1">
+          {displayedEpisodes.map((ep) => {
+            const isCurrent = ep.number === episode.number;
+            return (
+              <div
+                key={ep.number}
+                className={`p-3 rounded-lg border flex items-center justify-between gap-2 transition-colors ${
+                  isCurrent
+                    ? 'bg-sky-500/10 border-sky-500/50 text-sky-600 dark:text-sky-400'
+                    : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => onSelectEpisode(ep)}
+                  className="text-left min-w-0 flex-1 cursor-pointer"
+                >
+                  <div className="text-xs font-mono font-bold">
+                    Серия {String(ep.number).padStart(2, '0')}
+                  </div>
+                  <div className="text-xs truncate opacity-90">{ep.title}</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onQueueEpisode(anime, ep, voiceover, quality, season.title)}
+                  aria-label={`Скачать серию ${ep.number}`}
+                  className="p-1.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-sky-500 cursor-pointer shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
