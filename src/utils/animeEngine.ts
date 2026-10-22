@@ -595,6 +595,7 @@ const KNOWN_ANIME_DATABASE: KnownAnimeTemplate[] = [
     keywords: [
       'клинок, рассекающий демонов',
       'клинок рассекающий демонов',
+      'клинок',
       'klinok rassekayuschiy demonov',
       'klinok rassekayushchiy demonov',
       'demon slayer',
@@ -1547,6 +1548,9 @@ const KNOWN_ANIME_DATABASE: KnownAnimeTemplate[] = [
       'о моем перерождении в слизь',
       'о моём перерождении в слизь',
       'перерождение в слизь',
+      'слизь',
+      'римуру',
+      'slime',
       'vremya pererozhdeniya v sliz',
       'o moem pererozhdenii v sliz',
       'tensei shitara slime datta ken',
@@ -1922,37 +1926,37 @@ function buildSlugFromText(text: string): string {
 
 export const ANIME_POSTER_CDN_MAP: Record<string, string> = {
   'kusuriya-no-hitorigoto':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx161645-QLbzHXiYRgV2.jpg',
+    'https://cdn.myanimelist.net/images/anime/1708/138033l.jpg',
   'black-clover':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx97940-fyh8o7gNbha0.png',
+    'https://cdn.myanimelist.net/images/anime/2/88336l.jpg',
   'chainsaw-man':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx127230-DdP4vAdssLoz.png',
+    'https://cdn.myanimelist.net/images/anime/1806/126216l.jpg',
   'jujutsu-kaisen':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx113415-LHBAeoZDIsnF.jpg',
+    'https://cdn.myanimelist.net/images/anime/1171/109222l.jpg',
   'kimetsu-no-yaiba':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101922-WBsBl0ClmgYL.jpg',
+    'https://cdn.myanimelist.net/images/anime/1286/99889l.jpg',
   'solo-leveling':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx151807-it355ZgzquUd.png',
+    'https://cdn.myanimelist.net/images/anime/1801/142390l.jpg',
   'sousou-no-frieren':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx154587-qQTzQnEJJ3oB.jpg',
+    'https://cdn.myanimelist.net/images/anime/1015/138006l.jpg',
   'shingeki-no-kyojin':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx16498-buvcRTBx4NSm.jpg',
+    'https://cdn.myanimelist.net/images/anime/10/47347l.jpg',
   'one-piece':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21-ELSYx3yMPcKM.jpg',
+    'https://cdn.myanimelist.net/images/anime/6/73245l.jpg',
   'bleach-tybw':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx116674-p3zK4PUX2Aag.jpg',
+    'https://cdn.myanimelist.net/images/anime/1908/135431l.jpg',
   'naruto-shippuuden':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx1735-kGfVm0YqCPcu.png',
+    'https://cdn.myanimelist.net/images/anime/1565/111305l.jpg',
   'blue-lock':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx137822-U8naszP96vzC.png',
+    'https://cdn.myanimelist.net/images/anime/1258/126929l.jpg',
   'spy-x-family':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx140960-Kb6R5nYQfjmP.jpg',
+    'https://cdn.myanimelist.net/images/anime/1441/122795l.jpg',
   'oshi-no-ko':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx150672-WqmmwZ4nMzAy.png',
+    'https://cdn.myanimelist.net/images/anime/1812/134736l.jpg',
   'dandadan':
-    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx171018-60q1B6GK2Ghb.jpg',
+    'https://cdn.myanimelist.net/images/anime/1584/143719l.jpg',
   'tensei-shitara-slime-datta-ken':
-    'https://desu.shikimori.one/uploads/poster/animes/37430/main_2x-1937ff7b7ca829b3a0a383b16a246a47.webp',
+    'https://cdn.myanimelist.net/images/anime/1694/93337l.jpg',
 };
 
 function buildMultiSiteResultsFromTemplate(
