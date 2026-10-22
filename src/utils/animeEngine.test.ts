@@ -219,3 +219,20 @@ test('buildTargetFilePath and generatePlatformBatchScript support macOS, Windows
   assert.equal(metrics.activeCount, 1);
   assert.equal(formatTimecode(1445), '24:05');
 });
+
+test('Poster resolution maps Tensei shitara Slime Datta Ken accurately and never assigns Black Clover poster to other titles', () => {
+  const slimeSearch = searchAnimeAcrossSites('О моем перерождении в слизь');
+  assert.equal(slimeSearch.ok, true);
+  assert.equal(slimeSearch.results[0].title, 'О моём перерождении в слизь');
+  assert.equal(
+    slimeSearch.results[0].posterUrl,
+    'https://desu.shikimori.one/uploads/poster/animes/37430/main_2x-1937ff7b7ca829b3a0a383b16a246a47.webp'
+  );
+
+  const customQuery = searchAnimeAcrossSites('Волчица и пряности');
+  assert.equal(customQuery.ok, true);
+  // Unlisted titles must have empty posterUrl so AnimeArtwork fetches from Shikimori API or renders neutral placeholder
+  assert.equal(customQuery.results[0].posterUrl, '');
+  assert.equal(customQuery.results[0].posterUrl.includes('bx97940'), false);
+});
+

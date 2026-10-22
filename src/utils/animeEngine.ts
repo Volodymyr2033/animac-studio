@@ -1542,6 +1542,148 @@ const KNOWN_ANIME_DATABASE: KnownAnimeTemplate[] = [
       },
     ],
   },
+  {
+    keywords: [
+      'о моем перерождении в слизь',
+      'о моём перерождении в слизь',
+      'перерождение в слизь',
+      'vremya pererozhdeniya v sliz',
+      'o moem pererozhdenii v sliz',
+      'tensei shitara slime datta ken',
+      'that time i got reincarnated as a slime',
+      'tensura',
+      'римуру темпест',
+    ],
+    slug: 'tensei-shitara-slime-datta-ken',
+    title: 'О моём перерождении в слизь',
+    originalTitle: 'Tensei shitara Slime Datta Ken / That Time I Got Reincarnated as a Slime',
+    year: 2018,
+    genres: ['Исекай', 'Фэнтези', 'Приключения', 'Экшен'],
+    rating: '9.1',
+    synopsis:
+      'Обычный японский служащий Сатору Миками погибает от рук грабителя и перерождается в фэнтезийном мире в виде разумной слизи по имени Римуру Темпест, способной поглощать чужие способности и строить собственное государство монстров — Федерацию Джура Темпест.',
+    artworkTheme: 'alchemist',
+    seasons: [
+      {
+        id: 's1',
+        number: 1,
+        title: 'Сезон 1',
+        subtitle: 'Основание Федерации Джура Темпест',
+        year: 2018,
+        totalEpisodes: 24,
+        episodeTitles: [
+          'Дракон Бури Велдора',
+          'Встреча с гоблинами',
+          'Битва в деревне гоблинов',
+          'В королевстве дварфов',
+          'Герой-король Газель Дварго',
+          'Сидзу',
+          'Завоеватель пламени',
+          'Унаследованная воля',
+          'Атака огров',
+          'Повелитель орков',
+          'Габиру здесь!',
+          'Сломанный механизм',
+          'Великое столкновение',
+          'Тот, кто пожирает всё',
+          'Федерация Леса Джура',
+          'Князь Тьмы Милим нападает',
+          'Собравшиеся',
+          'Крадущаяся злоба',
+          'Харибда',
+          'Юки Кагуразака',
+          'Преподаватель Сидзу-сан',
+          'Лабиринт духов',
+          'Спасённые души',
+          'Внешняя история: Чёрное и маска',
+        ],
+      },
+      {
+        id: 's2',
+        number: 2,
+        title: 'Сезон 2',
+        subtitle: 'Пробуждение Князя Тьмы и Вальпургиева ночь',
+        year: 2021,
+        totalEpisodes: 24,
+        episodeTitles: [
+          'Напряжённые будни Римуру',
+          'Торговля со зверолюдьми',
+          'Рай снова',
+          'Интрига королевства Фармус',
+          'Прелюдия к катастрофе',
+          'Красавица делает ход',
+          'Отчаяние',
+          'Надежда',
+          'Поставив всё на кон',
+          'Мегиддо',
+          'Рождение Князя Тьмы',
+          'Освобождённый',
+          'Посетители',
+          'Встреча людей и монстров',
+          'Весть от Рамирис',
+          'Конференция начинается',
+          'Лиса и девять хвостов',
+          'Князья Тьмы и их замыслы',
+          'Сигнал к началу банкета',
+          'На земле судьбы',
+          'Адальман, Указательный палец',
+          'Вальпургиева ночь',
+          'Возвращение из бездны',
+          'Октаграмма — Князья Тьмы восьми звёзд',
+        ],
+      },
+      {
+        id: 's3',
+        number: 3,
+        title: 'Сезон 3',
+        subtitle: 'Святые и монстры · Фестиваль основания Темпеста',
+        year: 2024,
+        totalEpisodes: 24,
+        episodeTitles: [
+          'Демоны и заговоры',
+          'Намерения Святого',
+          'Мирные дни и новая подготовка',
+          'Испытание Хинаты Сакагути',
+          'Совещание обеих сторон',
+          'Надвигающиеся рыцари',
+          'Святые и монстры',
+          'Кнопка недоразумения',
+          'Заговор Семи Светил',
+          'Бог и Князь Тьмы',
+          'Примирение и договор',
+          'Подготовка к Фестивалю',
+          'Приглашённые народы',
+          'Лабиринт и фея',
+          'Аудиенция',
+          'Испытания Беннимару',
+          'Сверкающий герой Масаюки',
+          'Наплыв гостей',
+          'Ночь перед открытием',
+          'Фестиваль основания государства',
+          'Турнир боевых искусств',
+          'Сведение счётов с Героем',
+          'Открытие подземного лабиринта',
+          'После фестиваля',
+        ],
+      },
+      {
+        id: 'ova',
+        number: 0,
+        title: 'Фильмы / OVA',
+        subtitle: 'Алые узы, Мечта Коуру и Дневники слизи',
+        year: 2023,
+        totalEpisodes: 5,
+        isMovieOrOva: true,
+        episodeTitles: [
+          'Фильм: Алые узы (Guren no Kizuna-hen)',
+          'OVA: Мечта Коуру — Часть 1',
+          'OVA: Мечта Коуру — Часть 2',
+          'OVA: Мечта Коуру — Часть 3',
+          'Спецвыпуск: Слава сумо и приключения Римуру',
+        ],
+      },
+    ],
+  },
 ];
 
 const TRANSLIT_WORD_MAP: Record<string, string> = {
@@ -1609,6 +1751,9 @@ const TRANSLIT_WORD_MAP: Record<string, string> = {
   vremya: 'время',
   sliz: 'слизь',
   pererozhdenie: 'перерождение',
+  pererozhdenii: 'перерождении',
+  moem: 'моём',
+  moyom: 'моём',
   zhizn: 'жизнь',
   mire: 'мире',
   drugom: 'другом',
@@ -1713,13 +1858,20 @@ export function resolveCleanAnimeTitles(rawSlugOrText: string): {
   matchedTemplate?: KnownAnimeTemplate;
 } {
   const { cleanSlug, seasonNumber } = cleanAnimeSlugAndText(rawSlugOrText);
-  const spacedClean = cleanSlug.replace(/-/g, ' ');
+  const spacedClean = cleanSlug.replace(/-/g, ' ').trim();
 
   const matched = KNOWN_ANIME_DATABASE.find((t) => {
-    if (cleanSlug.includes(t.slug) || t.slug.includes(cleanSlug)) return true;
+    if (cleanSlug === t.slug) return true;
+    if (cleanSlug.length >= 4 && (cleanSlug.includes(t.slug) || t.slug.includes(cleanSlug))) {
+      return true;
+    }
     return t.keywords.some((kw) => {
       const kwNorm = kw.toLowerCase().replace(/[^a-zа-яё0-9]+/gi, ' ').trim();
-      return spacedClean.includes(kwNorm) || kwNorm.includes(spacedClean);
+      if (spacedClean === kwNorm) return true;
+      if (spacedClean.length >= 4 && (spacedClean.includes(kwNorm) || kwNorm.includes(spacedClean))) {
+        return true;
+      }
+      return false;
     });
   });
 
@@ -1799,6 +1951,8 @@ export const ANIME_POSTER_CDN_MAP: Record<string, string> = {
     'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx150672-WqmmwZ4nMzAy.png',
   'dandadan':
     'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx171018-60q1B6GK2Ghb.jpg',
+  'tensei-shitara-slime-datta-ken':
+    'https://desu.shikimori.one/uploads/poster/animes/37430/main_2x-1937ff7b7ca829b3a0a383b16a246a47.webp',
 };
 
 function buildMultiSiteResultsFromTemplate(

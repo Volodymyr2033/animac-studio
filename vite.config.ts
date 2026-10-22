@@ -81,7 +81,7 @@ export default defineConfig(() => {
               },
             },
             {
-              urlPattern: /^https:\/\/(shikimori\.one|cdn\.myanimelist\.net|s4\.anilist\.co)\/.*/i,
+              urlPattern: /^https:\/\/(shikimori\.one|desu\.shikimori\.one|nyaa\.shikimori\.one|cdn\.myanimelist\.net|s4\.anilist\.co)\/.*/i,
               handler: 'CacheFirst',
               options: {
                 cacheName: 'anime-posters-cache',
