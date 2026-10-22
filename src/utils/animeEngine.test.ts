@@ -118,20 +118,24 @@ test('validateAnimeSourceUrl accepts both plain-text anime titles and official H
   assert.equal(vost.slug, '3001-bleach');
 });
 
-test('searchAnimeAcrossSites returns results from YummyAnime.TV, AnimeGO, and AnimeVost.org for title queries', () => {
+test('searchAnimeAcrossSites returns ONE unified anime card for title queries and supports direct stream URLs', () => {
   const resRu = searchAnimeAcrossSites('Черный клевер');
   assert.equal(resRu.ok, true);
   assert.equal(resRu.mode, 'search');
-  assert.equal(resRu.results.length, 3);
-  const sites = resRu.results.map((r) => r.sourceSite);
-  assert.deepEqual(sites, ['YummyAnime.TV', 'AnimeGO', 'AnimeVost.org']);
+  assert.equal(resRu.results.length, 1);
   assert.equal(resRu.results[0].title, 'Чёрный клевер');
   assert.equal(resRu.results[0].originalTitle, 'Black Clover');
+  assert.equal(resRu.results[0].availableVoiceovers.includes('AniLibria'), true);
 
   const resEn = searchAnimeAcrossSites('Black Clover');
   assert.equal(resEn.ok, true);
-  assert.equal(resEn.results.length, 3);
+  assert.equal(resEn.results.length, 1);
   assert.equal(resEn.results[0].title, 'Чёрный клевер');
+
+  const directM3u8 = searchAnimeAcrossSites('https://cache.libria.fun/videos/media/ts/8789/1/1080/index.m3u8');
+  assert.equal(directM3u8.ok, true);
+  assert.equal(directM3u8.mode, 'url');
+  assert.equal(directM3u8.results.length, 1);
 });
 
 test('validateAnimeSourceUrl blocks SSRF, HTTP, XSS, Path Traversal, and untrusted domains', () => {

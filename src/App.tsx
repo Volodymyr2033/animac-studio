@@ -15,7 +15,6 @@ import {
   Terminal,
   Clock,
   WifiOff,
-  Globe,
   Sparkles,
   X,
   Layers,
@@ -35,7 +34,6 @@ import {
   FavoriteAnimeItem,
   FavoriteCategory,
   POPULAR_SEARCH_CHIPS,
-  SOURCE_SITES_DIRECTORY,
   SavedAnimePlaylist,
   VIDEO_QUALITIES,
   VOICEOVER_STUDIOS,
@@ -63,6 +61,7 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import {
   VideoPlayerView,
   getSavedEpisodeTimecode,
+  resolveEpisodeStreamUrlForDownload,
   saveEpisodeTimecode,
 } from './components/VideoPlayerModal';
 import {
@@ -129,7 +128,6 @@ export default function App() {
   const [universalInput, setUniversalInput] = useState('');
   const [activeQueryLabel, setActiveQueryLabel] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<AnimeSeries[]>([]);
-  const [siteFilter, setSiteFilter] = useState<'ALL' | SourceSite>('ALL');
   const [searchFeedback, setSearchFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
@@ -335,7 +333,7 @@ export default function App() {
               voiceover: o.voiceover,
               quality: o.quality as VideoQuality,
               sourceSite: o.sourceSite as SourceSite,
-              sourceUrl: 'https://yummyanime.tv',
+              sourceUrl: 'https://anilibria.top',
               status: 'completed',
               progressPercent: 100,
               speedMBps: 0,
@@ -398,13 +396,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [downloadQueue]);
 
-  // Filtered search results by site
-  const filteredSearchResults = useMemo(() => {
-    return searchResults.filter((anime) => {
-      return siteFilter === 'ALL' || anime.sourceSite === siteFilter;
-    });
-  }, [searchResults, siteFilter]);
-
   // Grouped active queue by anime title
   const activeQueueGroups = useMemo(
     () => groupActiveQueueByAnime(downloadQueue),
@@ -444,7 +435,6 @@ export default function App() {
       const norm = anime.title.trim().toLowerCase();
       setFavorites((prev) => {
         const existing = prev.find((f) => f.title.trim().toLowerCase() === norm);
-        // If clicking button with same category or without explicit category change when already in favorites, toggle or update
         if (existing && !category) {
           showBanner(`«${anime.title}» удалено из избранного.`);
           return prev.filter((f) => f.title.trim().toLowerCase() !== norm);
@@ -519,7 +509,7 @@ export default function App() {
     }));
   };
 
-  // Add single episode to sequential download queue
+  // Add single episode to sequential download queue and resolve working stream URL via Smart Stream Resolver
   const handleQueueEpisode = useCallback(
     (
       anime: AnimeSeries,
@@ -548,6 +538,15 @@ export default function App() {
         return enforceSequentialAnimeQueue([...filtered, newTask]);
       });
 
+      // Resolve real working stream URL in background and attach to queued task
+      resolveEpisodeStreamUrlForDownload(anime, episode.number, quality)
+        .then((resolvedUrl) => {
+          setDownloadQueue((prev) =>
+            prev.map((t) => (t.id === newTask.id ? { ...t, sourceUrl: resolvedUrl } : t))
+          );
+        })
+        .catch(() => {});
+
       showBanner(
         `Добавлено в очередь загрузок: «${anime.title}» (${resolvedSeasonTitle}) — Серия ${episode.number} [${voiceover}, ${quality}]`
       );
@@ -574,6 +573,17 @@ export default function App() {
       const uniqueNew = newTasks.filter((t) => !existingIds.has(t.id));
       return enforceSequentialAnimeQueue([...prev, ...uniqueNew]);
     });
+
+    // Resolve working stream URLs for queued episodes via Smart Stream Resolver
+    resolveEpisodeStreamUrlForDownload(anime, 1, sel.quality)
+      .then((resolvedUrl) => {
+        setDownloadQueue((prev) =>
+          prev.map((t) =>
+            t.animeTitle === anime.title ? { ...t, sourceUrl: resolvedUrl } : t
+          )
+        );
+      })
+      .catch(() => {});
 
     showBanner(
       `${season.title} (${season.episodes.length} сер.) «${anime.title}» поставлен в последовательную очередь загрузок`
@@ -636,6 +646,9 @@ export default function App() {
       });
 
       setActiveSection('player');
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     },
     []
   );
@@ -684,7 +697,7 @@ export default function App() {
     [playerState]
   );
 
-  // Execute Universal Search (by title OR URL)
+  // Execute Universal Search (by title OR direct URL) -> returns ONE unified anime card
   const executeUniversalSearch = useCallback((rawQuery: string) => {
     const res = searchAnimeAcrossSites(rawQuery);
     if (!res.ok) {
@@ -697,13 +710,12 @@ export default function App() {
 
     setSearchResults(res.results);
     setActiveQueryLabel(res.queryLabel);
-    setSiteFilter('ALL');
     setSearchFeedback({
       type: 'success',
       message:
         res.mode === 'url'
-          ? `Ссылка проверена (TLS 1.3): найден релиз «${res.queryLabel}» и зеркала на YummyAnime.TV, AnimeGO и AnimeVost.org.`
-          : `Найдено ${res.results.length} релиза по запросу «${res.queryLabel}» одновременно на YummyAnime.TV, AnimeGO и AnimeVost.org.`,
+          ? `Прямая ссылка распознана: «${res.queryLabel}» готово к просмотру и скачиванию.`
+          : `Найдено аниме «${res.queryLabel}» — выберите сезон, серию, озвучку и качество.`,
     });
   }, []);
 
@@ -778,8 +790,7 @@ export default function App() {
     if (playlist.episodes.length === 0) return;
     const matchedAnime = resolveAnimeForHistoryOrTask(
       playlist.animeId,
-      playlist.animeTitle,
-      playlist.sourceSite
+      playlist.animeTitle
     );
     const orderedEpisodeInfos: EpisodeInfo[] = playlist.episodes.map((ep) => ({
       number: ep.episodeNumber,
@@ -839,7 +850,7 @@ export default function App() {
     }
     const payload = {
       app: 'AniMac Studio',
-      version: '2.5',
+      version: '3.0',
       exportedAt: new Date().toISOString(),
       preferences: {
         theme,
@@ -903,21 +914,27 @@ export default function App() {
     activePlayerSeason.episodes.find((e) => e.number === playerState.episodeNumber) ||
     activePlayerSeason.episodes[0];
 
-  const availablePlayerAnimeChoices =
-    searchResults.length > 0 ? searchResults : DEFAULT_PLAYER_ANIME_LIST;
+  const availablePlayerAnimeChoices = useMemo(() => {
+    const map = new Map<string, AnimeSeries>();
+    for (const a of [playerState.anime, ...searchResults, ...DEFAULT_PLAYER_ANIME_LIST]) {
+      if (!map.has(a.id)) {
+        map.set(a.id, a);
+      }
+    }
+    return Array.from(map.values());
+  }, [playerState.anime, searchResults]);
 
   const effectiveOffline = !isOnline || simulateOfflineMode;
 
   const resolveAnimeForHistoryOrTask = (
     animeId: string,
-    title: string,
-    site: SourceSite
+    title: string
   ): AnimeSeries => {
     const foundInResults = searchResults.find((a) => a.id === animeId);
     if (foundInResults) return foundInResults;
     const searched = searchAnimeAcrossSites(title);
     if (searched.ok && searched.results.length > 0) {
-      return searched.results.find((r) => r.sourceSite === site) || searched.results[0];
+      return searched.results[0];
     }
     return DEFAULT_PLAYER_ANIME_LIST[0];
   };
@@ -1165,17 +1182,17 @@ export default function App() {
                     id="extractor-heading"
                     className="text-xl md:text-2xl font-bold text-slate-900 dark:text-white tracking-tight"
                   >
-                    Универсальный поиск и загрузка аниме
+                    Поиск, просмотр и загрузка аниме
                   </h1>
                   <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                    Введите название аниме на русском или английском (например, «Магическая битва», «Человек-бензопила», «О моем перерождении в слизь») или прямую ссылку с YummyAnime.TV, AnimeGO или AnimeVost.org.
+                    Введите название аниме на русском или английском (например, «Магическая битва», «Человек-бензопила», «О моем перерождении в слизь») или вставьте прямую ссылку на аниме / видеопоток.
                   </p>
                 </div>
 
                 <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 shrink-0">
                   <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
                     <ShieldCheck className="w-4 h-4" />
-                    Защита: HTTPS + AniLibria API
+                    Умный подбор потока (1080p HD)
                   </span>
                   <span aria-hidden="true">·</span>
                   <span className="font-mono tabular-nums">
@@ -1192,7 +1209,7 @@ export default function App() {
               <form onSubmit={handleUniversalSearchSubmit} className="mt-5 flex flex-col sm:flex-row gap-3">
                 <div className="relative flex-1">
                   <label htmlFor="anime-universal-input" className="sr-only">
-                    Введите название аниме или ссылку с YummyAnime.TV, AnimeGO, AnimeVost.org
+                    Введите название аниме или прямую ссылку на видео
                   </label>
                   <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
@@ -1200,7 +1217,7 @@ export default function App() {
                     type="text"
                     value={universalInput}
                     onChange={(e) => setUniversalInput(e.target.value)}
-                    placeholder="Название («Человек-бензопила», «Магическая битва») или ссылка https://animego.org/..."
+                    placeholder="Название («Человек-бензопила», «Магическая битва») или прямая ссылка https://..."
                     className="w-full pl-10 pr-10 py-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
                   />
                   {universalInput && (
@@ -1219,7 +1236,7 @@ export default function App() {
                   className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <Search className="w-4 h-4" />
-                  Найти на 3 сайтах
+                  Найти аниме
                 </button>
               </form>
 
@@ -1280,46 +1297,23 @@ export default function App() {
               )}
             </section>
 
-            {/* DYNAMIC SEARCH RESULTS */}
+            {/* UNIFIED SEARCH RESULT CARD (ONE CLEAN CARD PER ANIME, NO DUPLICATE SITE CARDS) */}
             {searchResults.length > 0 && (
               <section aria-labelledby="search-results-heading" className="space-y-5">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div>
-                    <h2
-                      id="search-results-heading"
-                      className="text-lg font-bold text-slate-900 dark:text-white"
-                    >
-                      Результаты поиска по запросу «{activeQueryLabel}» ({filteredSearchResults.length})
-                    </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Синхронная выдача с YummyAnime.TV, AnimeGO и AnimeVost.org с выбором всех сезонов, серий, озвучки, качества и добавлением в Избранное.
-                    </p>
-                  </div>
-
-                  <div
-                    role="group"
-                    aria-label="Фильтр результатов по сайту-источнику"
-                    className="inline-flex items-center gap-1 p-1 rounded-lg bg-slate-200/80 dark:bg-slate-900 border border-slate-300/60 dark:border-slate-800 self-start"
+                <div>
+                  <h2
+                    id="search-results-heading"
+                    className="text-lg font-bold text-slate-900 dark:text-white"
                   >
-                    {(['ALL', 'YummyAnime.TV', 'AnimeGO', 'AnimeVost.org'] as const).map((site) => (
-                      <button
-                        key={site}
-                        type="button"
-                        onClick={() => setSiteFilter(site)}
-                        className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                          siteFilter === site
-                            ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                        }`}
-                      >
-                        {site === 'ALL' ? 'Все 3 сайта' : site}
-                      </button>
-                    ))}
-                  </div>
+                    Найденный релиз: «{activeQueryLabel}»
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Выберите сезон, серию, озвучку и качество (1080p / 720p / 480p), чтобы сразу смотреть или скачать.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 gap-6">
-                  {filteredSearchResults.map((anime) => {
+                  {searchResults.map((anime) => {
                     const sel = getCardSelection(anime);
                     const activeSeason =
                       anime.seasons.find((s) => s.id === sel.seasonId) || anime.seasons[0];
@@ -1355,6 +1349,7 @@ export default function App() {
                     return (
                       <article
                         key={anime.id}
+                        data-testid="unified-anime-result-card"
                         className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden flex flex-col md:flex-row"
                       >
                         {/* Left Real Poster Column */}
@@ -1375,11 +1370,9 @@ export default function App() {
                           <div>
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                                <span className="font-semibold text-sky-600 dark:text-sky-400">
-                                  {anime.sourceSite}
+                                <span className="font-mono tabular-nums font-semibold text-sky-600 dark:text-sky-400">
+                                  {activeSeason.year}
                                 </span>
-                                <span aria-hidden="true">·</span>
-                                <span className="font-mono tabular-nums">{activeSeason.year}</span>
                                 <span aria-hidden="true">·</span>
                                 <span className="font-mono tabular-nums">Рейтинг {anime.rating}</span>
                                 <span aria-hidden="true">·</span>
@@ -1660,23 +1653,6 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() =>
-                                  handleQueueEpisode(
-                                    anime,
-                                    selectedEp,
-                                    sel.voiceover,
-                                    sel.quality,
-                                    activeSeason.title
-                                  )
-                                }
-                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                                Скачать серию {selectedEp.number}
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() =>
                                   handleOpenInPlayer(
                                     anime,
                                     selectedEp,
@@ -1686,10 +1662,27 @@ export default function App() {
                                     activeSeason.id
                                   )
                                 }
+                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                <Play className="w-3.5 h-3.5" />
+                                Смотреть серию {selectedEp.number}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleQueueEpisode(
+                                    anime,
+                                    selectedEp,
+                                    sel.voiceover,
+                                    sel.quality,
+                                    activeSeason.title
+                                  )
+                                }
                                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
                               >
-                                <Play className="w-3.5 h-3.5 text-sky-500" />
-                                Смотреть серию {selectedEp.number}
+                                <Download className="w-3.5 h-3.5 text-sky-500" />
+                                Скачать серию {selectedEp.number}
                               </button>
 
                               <button
@@ -1710,70 +1703,89 @@ export default function App() {
               </section>
             )}
 
-            {/* HOME BLOCK A: COMPACT SOURCE SITES STATUS & QUICK LINKS */}
-            <section aria-labelledby="sources-status-heading" className="space-y-4">
+            {/* POPULAR ANIME QUICK LAUNCH CATALOG */}
+            <section aria-labelledby="popular-catalog-heading" className="space-y-4">
               <div className="flex items-center justify-between gap-4">
                 <h2
-                  id="sources-status-heading"
+                  id="popular-catalog-heading"
                   className="text-base font-bold text-slate-900 dark:text-white"
                 >
-                  Подключённые сайты-источники и каталог AniLibria
+                  Популярные аниме для быстрого просмотра и скачивания
                 </h2>
                 <span className="text-xs text-slate-500 dark:text-slate-400">
-                  Прямой парсинг потоков и озвучек
+                  Нажмите на тайтл, чтобы сразу открыть серии или запустить плеер
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {SOURCE_SITES_DIRECTORY.map((src) => (
-                  <div
-                    key={src.site}
-                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex flex-col justify-between gap-4"
-                  >
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-bold text-slate-900 dark:text-white inline-flex items-center gap-2">
-                          <Globe className="w-4 h-4 text-sky-500 shrink-0" />
-                          {src.site}
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                          {src.statusLabel}
-                        </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {DEFAULT_PLAYER_ANIME_LIST.slice(0, 6).map((item) => {
+                  const favCat = getFavoriteCategoryForAnime(item.title);
+                  const firstEp = item.episodes[0];
+                  return (
+                    <div
+                      key={item.id}
+                      className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex items-center justify-between gap-4"
+                    >
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <div className="w-14 h-20 rounded-xl overflow-hidden shrink-0 bg-slate-950">
+                          <AnimeArtwork
+                            title={item.title}
+                            originalTitle={item.originalTitle}
+                            posterUrl={item.posterUrl}
+                            theme={item.artworkTheme}
+                            className="w-full h-full object-cover rounded-xl"
+                          />
+                        </div>
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span className="font-mono font-semibold text-sky-600 dark:text-sky-400">
+                              ★ {item.rating}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>{item.seasons.length} сез.</span>
+                          </div>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                            {item.title}
+                          </h3>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                            {item.originalTitle}
+                          </p>
+                        </div>
                       </div>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Озвучки: {src.supportedStudios}
-                      </p>
-                      <p className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                        Домен: {src.mirrorDomain} · Макс. поток: {src.maxResolution}
-                      </p>
-                    </div>
 
-                    <div className="flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800/80">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const q =
-                            universalInput.trim() || activeQueryLabel || 'Магическая битва';
-                          setUniversalInput(q);
-                          executeUniversalSearch(q);
-                          setSiteFilter(src.site);
-                        }}
-                        className="flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 transition-colors cursor-pointer text-center"
-                      >
-                        Искать на {src.site}
-                      </button>
-                      <a
-                        href={src.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap"
-                      >
-                        Открыть сайт ↗
-                      </a>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleOrSetFavorite(item)}
+                          aria-label={`В избранное ${item.title}`}
+                          className={`p-2 rounded-lg border transition-colors cursor-pointer ${
+                            favCat
+                              ? 'bg-rose-500/15 border-rose-500/40 text-rose-500'
+                              : 'border-slate-200 dark:border-slate-800 text-slate-400 hover:text-rose-500'
+                          }`}
+                        >
+                          <Heart className={`w-4 h-4 ${favCat ? 'fill-rose-500' : ''}`} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleOpenInPlayer(
+                              item,
+                              firstEp,
+                              defaultVoiceover,
+                              defaultQuality,
+                              0
+                            )
+                          }
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          Смотреть
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           </>
@@ -1785,11 +1797,11 @@ export default function App() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <h1 id="player-heading" className="text-2xl font-bold text-slate-900 dark:text-white">
-                  Встроенный плеер · {activePlayerAnime.title} ({activePlayerSeason.title})
+                  {activePlayerAnime.title} · {activePlayerSeason.title}
                 </h1>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   Серия {activePlayerEpisode.number}: {activePlayerEpisode.title} · Озвучка:{' '}
-                  {playerState.voiceover} · Поток {playerState.quality} ({activePlayerAnime.sourceSite})
+                  {playerState.voiceover} · Качество {playerState.quality}
                 </p>
               </div>
 
@@ -1798,7 +1810,7 @@ export default function App() {
                   htmlFor="player-anime-switcher"
                   className="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap"
                 >
-                  Источник / Релиз:
+                  Быстрый выбор аниме:
                 </label>
                 <select
                   id="player-anime-switcher"
@@ -1825,7 +1837,7 @@ export default function App() {
                 >
                   {availablePlayerAnimeChoices.map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.title} ({a.sourceSite})
+                      {a.title}
                     </option>
                   ))}
                 </select>
@@ -1957,8 +1969,7 @@ export default function App() {
                 {filteredFavorites.map((fav) => {
                   const matchedAnime = resolveAnimeForHistoryOrTask(
                     fav.animeId,
-                    fav.title,
-                    fav.sourceSite
+                    fav.title
                   );
                   const firstEp = matchedAnime.episodes[0];
                   return (
@@ -1980,8 +1991,6 @@ export default function App() {
                             <span className="font-semibold text-rose-500">
                               {FAVORITE_CATEGORIES.find((c) => c.id === fav.category)?.label}
                             </span>
-                            <span aria-hidden="true">·</span>
-                            <span>{fav.sourceSite}</span>
                             <span aria-hidden="true">·</span>
                             <span className="font-mono">★ {fav.rating}</span>
                           </div>
@@ -2209,16 +2218,14 @@ export default function App() {
                         >
                           <div className="space-y-1.5 flex-1 min-w-0">
                             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                              <span className="font-semibold text-sky-600 dark:text-sky-400">
-                                {task.sourceSite}
-                              </span>
                               {task.seasonTitle && (
                                 <>
+                                  <span className="font-semibold text-sky-600 dark:text-sky-400">
+                                    {task.seasonTitle}
+                                  </span>
                                   <span aria-hidden="true">·</span>
-                                  <span>{task.seasonTitle}</span>
                                 </>
                               )}
-                              <span aria-hidden="true">·</span>
                               <span>Озвучка: {task.voiceover}</span>
                               <span aria-hidden="true">·</span>
                               <span className="font-mono">{task.quality}</span>
@@ -2368,8 +2375,7 @@ export default function App() {
                       activeSelectedPlaylist?.playlistKey === playlist.playlistKey;
                     const matchedAnime = resolveAnimeForHistoryOrTask(
                       playlist.animeId,
-                      playlist.animeTitle,
-                      playlist.sourceSite
+                      playlist.animeTitle
                     );
                     return (
                       <div
@@ -2401,7 +2407,7 @@ export default function App() {
                               {playlist.animeTitle}
                             </h3>
                             <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                              Объём: {playlist.totalSizeMB} МБ · {playlist.sourceSite}
+                              Объём: {playlist.totalSizeMB} МБ
                             </p>
                           </div>
                         </div>
@@ -2447,8 +2453,7 @@ export default function App() {
                         {activeSelectedPlaylist.episodes.map((epTask) => {
                           const matchedAnime = resolveAnimeForHistoryOrTask(
                             epTask.animeId,
-                            epTask.animeTitle,
-                            epTask.sourceSite
+                            epTask.animeTitle
                           );
                           const epInfo: EpisodeInfo = {
                             number: epTask.episodeNumber,
@@ -2597,8 +2602,7 @@ export default function App() {
                   );
                   const matchedAnime = resolveAnimeForHistoryOrTask(
                     item.animeId,
-                    item.animeTitle,
-                    item.sourceSite
+                    item.animeTitle
                   );
                   const matchedEp = matchedAnime.episodes.find(
                     (e) => e.number === item.episodeNumber
@@ -2626,16 +2630,14 @@ export default function App() {
                         </div>
                         <div className="space-y-1.5 flex-1 min-w-0">
                           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                            <span className="font-semibold text-sky-600 dark:text-sky-400">
-                              {item.sourceSite}
-                            </span>
                             {item.seasonTitle && (
                               <>
+                                <span className="font-semibold text-sky-600 dark:text-sky-400">
+                                  {item.seasonTitle}
+                                </span>
                                 <span aria-hidden="true">·</span>
-                                <span>{item.seasonTitle}</span>
                               </>
                             )}
-                            <span aria-hidden="true">·</span>
                             <span>Озвучка: {item.voiceover}</span>
                             <span aria-hidden="true">·</span>
                             <span className="font-mono tabular-nums">{item.quality}</span>
@@ -2704,7 +2706,7 @@ export default function App() {
       <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-6 py-4 text-xs text-slate-500 dark:text-slate-400">
         <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <span>
-            AniMac Studio · Прямая интеграция с каталогом AniLibria (HLS 1080p) · Автономное хранение в localStorage и IndexedDB
+            AniMac Studio · Умный подбор потоков (1080p HD) · Автономное хранение в localStorage и IndexedDB
           </span>
           <span className="font-mono">
             macOS · Windows 10/11 · Android PWA

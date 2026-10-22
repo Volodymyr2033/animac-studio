@@ -28,6 +28,16 @@ const ALLOWED_DOMAINS: Record<string, SourceSite> = {
   'animevost.org': 'AnimeVost.org',
   'www.animevost.org': 'AnimeVost.org',
   'v2.vost.pw': 'AnimeVost.org',
+  'anilibria.tv': 'YummyAnime.TV',
+  'www.anilibria.tv': 'YummyAnime.TV',
+  'anilibria.top': 'YummyAnime.TV',
+  'www.anilibria.top': 'YummyAnime.TV',
+  'cache.libria.fun': 'YummyAnime.TV',
+  'api.libria.fun': 'YummyAnime.TV',
+  'shikimori.one': 'AnimeGO',
+  'www.shikimori.one': 'AnimeGO',
+  'jut.su': 'AnimeVost.org',
+  'www.jut.su': 'AnimeVost.org',
 };
 
 const PRIVATE_HOST_PATTERNS = [
@@ -75,7 +85,7 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
     return {
       valid: false,
       isUrlInput: false,
-      error: 'Введите название аниме (например, «Черный клевер») или прямую ссылку на тайтл.',
+      error: 'Введите название аниме (например, «Черный клевер») или прямую ссылку на аниме / видеопоток.',
       securityFlags: defaultFlags,
     };
   }
@@ -94,7 +104,7 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
     };
   }
 
-  // If the input is a plain-text title query (not a URL), allow it cleanly for multi-site search
+  // If the input is a plain-text title query (not a URL), allow it cleanly for search
   if (!isLikelyUrlInput(trimmed)) {
     return {
       valid: true,
@@ -112,7 +122,7 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
     return {
       valid: false,
       isUrlInput: true,
-      error: 'Некорректная ссылка. Введите название аниме текстом или ссылку с YummyAnime.TV, AnimeGO, AnimeVost.org.',
+      error: 'Некорректная ссылка. Введите название аниме текстом или прямую HTTPS-ссылку.',
       securityFlags: { ...defaultFlags, httpsEnforced: false, domainAllowlisted: false },
     };
   }
@@ -139,12 +149,13 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
     };
   }
 
-  const matchedSite = ALLOWED_DOMAINS[hostname];
+  const isDirectVideoFile = /\.(m3u8|mp4|webm)(\?.*)?$/i.test(parsed.pathname);
+  const matchedSite = ALLOWED_DOMAINS[hostname] || (isDirectVideoFile ? 'YummyAnime.TV' : undefined);
   if (!matchedSite) {
     return {
       valid: false,
       isUrlInput: true,
-      error: `Домен «${hostname}» не входит в белый список проверенных источников (YummyAnime.TV, AnimeGO, AnimeVost.org).`,
+      error: `Домен «${hostname}» не входит в список поддерживаемых источников аниме.`,
       securityFlags: { ...defaultFlags, httpsEnforced: true, domainAllowlisted: false },
     };
   }
@@ -157,7 +168,7 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
   const lastSegment = rawSegments[rawSegments.length - 1] || 'anime-title';
   const cleanSlug =
     lastSegment
-      .replace(/\.html?$/i, '')
+      .replace(/\.(html?|m3u8|mp4|webm)$/i, '')
       .replace(/[^a-zA-Z0-9_-]/g, '-')
       .replace(/-+/g, '-')
       .replace(/^-|-$/g, '')
@@ -166,7 +177,7 @@ export function validateAnimeSourceUrl(rawInput: string): UrlValidationResult {
   return {
     valid: true,
     isUrlInput: true,
-    sanitizedUrl: `https://${hostname}${parsed.pathname}`,
+    sanitizedUrl: `https://${hostname}${parsed.pathname}${parsed.search || ''}`,
     sourceSite: matchedSite,
     slug: cleanSlug,
     securityFlags: {

@@ -2103,51 +2103,39 @@ function buildMultiSiteResultsFromTemplate(
 
   const posterUrl = ANIME_POSTER_CDN_MAP[template.slug] || '';
 
-  const siteConfigs: {
-    site: SourceSite;
-    url: string;
-    voiceovers: string[];
-    qualities: VideoQuality[];
-  }[] = [
-    {
-      site: 'YummyAnime.TV',
-      url: `https://yummyanime.tv/catalog/item/${template.slug}`,
-      voiceovers: ['AniLibria', 'StudioBand (Студийная Банда)', 'SHIZA Project', 'Dream Cast', 'Субтитры (Crunchyroll)'],
-      qualities: ['2160p', '1080p', '720p', '480p'],
-    },
-    {
-      site: 'AnimeGO',
-      url: `https://animego.org/anime/${template.slug}`,
-      voiceovers: ['StudioBand (Студийная Банда)', 'AniLibria', 'AniDUB', 'SHIZA Project', 'Субтитры (Crunchyroll)'],
-      qualities: ['2160p', '1080p', '720p', '480p'],
-    },
-    {
-      site: 'AnimeVost.org',
-      url: `https://animevost.org/tip/tv/${template.slug}.html`,
-      voiceovers: ['AnimeVost', 'AniLibria', 'AniDUB', 'SHIZA Project'],
-      qualities: ['1080p', '720p', '480p'],
-    },
+  const unifiedVoiceovers = [
+    'AniLibria',
+    'StudioBand (Студийная Банда)',
+    'SHIZA Project',
+    'AniDUB',
+    'AnimeVost',
+    'Dream Cast',
+    'Субтитры',
   ];
 
-  return siteConfigs.map((cfg) => ({
-    id: `${template.slug}-${cfg.site.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
-    title: template.title,
-    originalTitle: template.originalTitle,
-    posterUrl,
-    sourceSite: cfg.site,
-    sourceUrl: cfg.url,
-    year: preferredSeason.year,
-    genres: template.genres,
-    rating: template.rating,
-    totalEpisodes: preferredSeason.totalEpisodes,
-    availableVoiceovers: cfg.voiceovers,
-    availableQualities: cfg.qualities,
-    synopsis: template.synopsis,
-    artworkTheme: template.artworkTheme,
-    seasons,
-    defaultSeasonId: preferredSeason.id,
-    episodes: preferredSeason.episodes,
-  }));
+  const unifiedQualities: VideoQuality[] = ['1080p', '720p', '480p', '2160p'];
+
+  return [
+    {
+      id: template.slug,
+      title: template.title,
+      originalTitle: template.originalTitle,
+      posterUrl,
+      sourceSite: 'YummyAnime.TV',
+      sourceUrl: `https://anilibria.top/anime/releases/release/${template.slug}`,
+      year: preferredSeason.year,
+      genres: template.genres,
+      rating: template.rating,
+      totalEpisodes: preferredSeason.totalEpisodes,
+      availableVoiceovers: unifiedVoiceovers,
+      availableQualities: unifiedQualities,
+      synopsis: template.synopsis,
+      artworkTheme: template.artworkTheme,
+      seasons,
+      defaultSeasonId: preferredSeason.id,
+      episodes: preferredSeason.episodes,
+    },
+  ];
 }
 
 function buildDynamicSeasons(
@@ -2202,8 +2190,8 @@ function buildDynamicSeasons(
 }
 
 /**
- * Performs simultaneous search across YummyAnime.TV, AnimeGO, and AnimeVost.org
- * for any Russian or English anime title OR direct URL.
+ * Performs unified anime search for any Russian or English anime title OR direct URL,
+ * returning a single clean, unified card for the matched anime.
  */
 export function searchAnimeAcrossSites(rawInput: string): {
   ok: boolean;
@@ -2223,25 +2211,25 @@ export function searchAnimeAcrossSites(rawInput: string): {
     };
   }
 
-  // Case 1: Direct URL from YummyAnime.TV, AnimeGO, or AnimeVost.org
+  // Case 1: Direct URL pasted by user
   if (validation.isUrlInput && validation.sourceSite && validation.sanitizedUrl && validation.slug) {
     const resolved = resolveCleanAnimeTitles(validation.slug);
 
     if (resolved.matchedTemplate) {
-      const allSiteResults = buildMultiSiteResultsFromTemplate(
+      const results = buildMultiSiteResultsFromTemplate(
         resolved.matchedTemplate,
         resolved.seasonNumber
       );
-      const sorted = [
-        ...allSiteResults.filter((r) => r.sourceSite === validation.sourceSite),
-        ...allSiteResults.filter((r) => r.sourceSite !== validation.sourceSite),
-      ];
-      sorted[0] = { ...sorted[0], sourceUrl: validation.sanitizedUrl };
+      results[0] = {
+        ...results[0],
+        sourceSite: validation.sourceSite,
+        sourceUrl: validation.sanitizedUrl,
+      };
       return {
         ok: true,
         mode: 'url',
         queryLabel: resolved.matchedTemplate.title,
-        results: sorted,
+        results,
       };
     }
 
@@ -2254,13 +2242,8 @@ export function searchAnimeAcrossSites(rawInput: string): {
       year: 2025,
       genres: ['Аниме', 'Фэнтези', 'Приключения'],
       rating: '9.0',
-      synopsis: `Релиз «${resolved.russianTitle}», доступный на ${validation.sourceSite} и зеркалах YummyAnime.TV, AnimeGO и AnimeVost.org с выбором сезона, русской озвучки и качества видео.`,
-      artworkTheme:
-        validation.sourceSite === 'YummyAnime.TV'
-          ? 'samurai'
-          : validation.sourceSite === 'AnimeGO'
-          ? 'cyber'
-          : 'mecha',
+      synopsis: `Релиз «${resolved.russianTitle}» с выбором сезона, серии, русской озвучки и качества видео (1080p / 720p / 480p).`,
+      artworkTheme: 'samurai',
       seasons: buildDynamicSeasons(resolved.russianTitle, resolved.seasonNumber),
     };
 
@@ -2268,21 +2251,21 @@ export function searchAnimeAcrossSites(rawInput: string): {
       customTemplate,
       resolved.seasonNumber
     );
-    const sorted = [
-      ...results.filter((r) => r.sourceSite === validation.sourceSite),
-      ...results.filter((r) => r.sourceSite !== validation.sourceSite),
-    ];
-    sorted[0] = { ...sorted[0], sourceUrl: validation.sanitizedUrl };
+    results[0] = {
+      ...results[0],
+      sourceSite: validation.sourceSite,
+      sourceUrl: validation.sanitizedUrl,
+    };
 
     return {
       ok: true,
       mode: 'url',
       queryLabel: resolved.russianTitle,
-      results: sorted,
+      results,
     };
   }
 
-  // Case 2: Plain-text title search (Russian, English, or translit) across all 3 sites
+  // Case 2: Plain-text title search (Russian, English, or translit) -> ONE unified card
   const cleanQuery = (validation.searchQuery || rawInput).trim();
   const resolved = resolveCleanAnimeTitles(cleanQuery);
 
@@ -2307,7 +2290,7 @@ export function searchAnimeAcrossSites(rawInput: string): {
     year: 2025,
     genres: ['Сёнэн', 'Экшен', 'Приключения'],
     rating: '8.9',
-    synopsis: `Синхронная раздача тайтла «${resolved.russianTitle}» из каталогов YummyAnime.TV, AnimeGO и AnimeVost.org с поддержкой всех сезонов, выбора студии озвучки и качества потока.`,
+    synopsis: `Релиз «${resolved.russianTitle}» с поддержкой всех сезонов, выбора студии озвучки и качества потока (1080p / 720p / 480p).`,
     artworkTheme: 'alchemist',
     seasons: buildDynamicSeasons(resolved.russianTitle, resolved.seasonNumber),
   };
@@ -2336,10 +2319,10 @@ export function extractAnimeFromUrl(rawUrl: string): {
 }
 
 /**
- * Default player fallback series ("Монолог фармацевта" across YummyAnime.TV, AnimeGO, AnimeVost.org)
+ * Default player series catalog (one unified entry per popular anime)
  */
-export const DEFAULT_PLAYER_ANIME_LIST: AnimeSeries[] = buildMultiSiteResultsFromTemplate(
-  KNOWN_ANIME_DATABASE[0]
+export const DEFAULT_PLAYER_ANIME_LIST: AnimeSeries[] = KNOWN_ANIME_DATABASE.map(
+  (tpl) => buildMultiSiteResultsFromTemplate(tpl)[0]
 );
 
 /**
