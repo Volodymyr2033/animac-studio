@@ -1,0 +1,6 @@
+{
+  "name": "AniMac Studio — Загрузчик и плеер аниме",
+  "description": "Десктопный менеджер загрузок и оффлайн-плеер аниме для macOS с поддержкой YummyAnime.TV, AnimeGO и AnimeVost.org, выбором озвучки, очередью скачивания и облачной синхронизацией.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

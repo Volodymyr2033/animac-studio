@@ -1,0 +1,255 @@
+{
+  "entities": {
+    "UserSyncProfile": {
+      "title": "UserSyncProfile",
+      "description": "Stores a user's synchronized watch history, download queue metadata, and cross-platform preferences (macOS, Windows, Android).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "The Firebase Auth UID of the profile owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name of the user.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "preferredPlatform": {
+          "type": "string",
+          "description": "Target OS profile (macos, windows, android).",
+          "enum": ["macos", "windows", "android"],
+          "minLength": 3,
+          "maxLength": 20
+        },
+        "preferredQuality": {
+          "type": "string",
+          "description": "Default video resolution setting.",
+          "enum": ["2160p", "1080p", "720p", "480p"],
+          "minLength": 4,
+          "maxLength": 10
+        },
+        "preferredVoiceover": {
+          "type": "string",
+          "description": "Default Russian voiceover studio.",
+          "minLength": 2,
+          "maxLength": 60
+        },
+        "theme": {
+          "type": "string",
+          "description": "UI color theme preference.",
+          "enum": ["dark", "light"],
+          "minLength": 4,
+          "maxLength": 10
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last sync."
+        }
+      },
+      "required": [
+        "ownerId",
+        "displayName",
+        "preferredPlatform",
+        "preferredQuality",
+        "preferredVoiceover",
+        "theme",
+        "updatedAt"
+      ]
+    },
+    "WatchHistoryEntry": {
+      "title": "WatchHistoryEntry",
+      "description": "Individual episode watch progress entry synchronized across macOS, Windows, and Android devices.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "The Firebase Auth UID of the owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "animeId": {
+          "type": "string",
+          "description": "ID of the anime series.",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "animeTitle": {
+          "type": "string",
+          "description": "Title of the anime series.",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "episodeNumber": {
+          "type": "number",
+          "description": "Episode number watched."
+        },
+        "episodeTitle": {
+          "type": "string",
+          "description": "Title of the episode.",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "voiceover": {
+          "type": "string",
+          "description": "Selected voiceover studio.",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "quality": {
+          "type": "string",
+          "description": "Video quality watched.",
+          "enum": ["2160p", "1080p", "720p", "480p"],
+          "minLength": 4,
+          "maxLength": 10
+        },
+        "sourceSite": {
+          "type": "string",
+          "description": "Source anime website.",
+          "enum": ["YummyAnime.TV", "AnimeGO", "AnimeVost.org"],
+          "minLength": 5,
+          "maxLength": 30
+        },
+        "progressSeconds": {
+          "type": "number",
+          "description": "Playback position in seconds."
+        },
+        "durationSeconds": {
+          "type": "number",
+          "description": "Total episode duration in seconds."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the watch event."
+        }
+      },
+      "required": [
+        "ownerId",
+        "animeId",
+        "animeTitle",
+        "episodeNumber",
+        "episodeTitle",
+        "voiceover",
+        "quality",
+        "sourceSite",
+        "progressSeconds",
+        "durationSeconds",
+        "updatedAt"
+      ]
+    },
+    "DownloadQueueEntry": {
+      "title": "DownloadQueueEntry",
+      "description": "Synchronized download task metadata so users can queue episodes from mobile/desktop and track status across devices.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "The Firebase Auth UID of the owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "animeId": {
+          "type": "string",
+          "description": "ID of the anime series.",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "animeTitle": {
+          "type": "string",
+          "description": "Title of the anime series.",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "episodeNumber": {
+          "type": "number",
+          "description": "Episode number.",
+          "minLength": 1
+        },
+        "episodeTitle": {
+          "type": "string",
+          "description": "Episode title.",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "voiceover": {
+          "type": "string",
+          "description": "Selected voiceover studio.",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "quality": {
+          "type": "string",
+          "description": "Selected video quality.",
+          "enum": ["2160p", "1080p", "720p", "480p"],
+          "minLength": 4,
+          "maxLength": 10
+        },
+        "sourceSite": {
+          "type": "string",
+          "description": "Source anime site.",
+          "enum": ["YummyAnime.TV", "AnimeGO", "AnimeVost.org"],
+          "minLength": 5,
+          "maxLength": 30
+        },
+        "status": {
+          "type": "string",
+          "description": "Download task status.",
+          "enum": ["queued", "downloading", "paused", "completed"],
+          "minLength": 5,
+          "maxLength": 20
+        },
+        "progressPercent": {
+          "type": "number",
+          "description": "Download percentage (0 to 100)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the task update."
+        }
+      },
+      "required": [
+        "ownerId",
+        "animeId",
+        "animeTitle",
+        "episodeNumber",
+        "episodeTitle",
+        "voiceover",
+        "quality",
+        "sourceSite",
+        "status",
+        "progressPercent",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserSyncProfile"
+      },
+      "description": "User sync profile document containing default preferences for macOS, Windows, and Android."
+    },
+    "/users/{userId}/watchHistory/{historyId}": {
+      "schema": {
+        "$ref": "#/entities/WatchHistoryEntry"
+      },
+      "description": "User's private watch history entries synchronized across devices."
+    },
+    "/users/{userId}/downloadQueue/{taskId}": {
+      "schema": {
+        "$ref": "#/entities/DownloadQueueEntry"
+      },
+      "description": "User's private download queue items synchronized across devices."
+    }
+  }
+}
