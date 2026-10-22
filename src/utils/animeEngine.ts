@@ -52,6 +52,8 @@ export interface DownloadTask {
   id: string;
   animeId: string;
   animeTitle: string;
+  originalTitle?: string;
+  posterUrl?: string;
   seasonTitle?: string;
   artworkTheme: AnimeSeries['artworkTheme'];
   episodeNumber: number;
@@ -76,6 +78,8 @@ export interface WatchHistoryItem {
   id: string;
   animeId: string;
   animeTitle: string;
+  originalTitle?: string;
+  posterUrl?: string;
   seasonTitle?: string;
   artworkTheme: AnimeSeries['artworkTheme'];
   episodeNumber: number;
@@ -86,6 +90,54 @@ export interface WatchHistoryItem {
   progressSeconds: number;
   durationSeconds: number;
   updatedAtIso: string;
+}
+
+export type FavoriteCategory = 'watching' | 'planned' | 'completed' | 'favorite';
+
+export const FAVORITE_CATEGORIES: { id: FavoriteCategory; label: string }[] = [
+  { id: 'watching', label: 'Смотрю' },
+  { id: 'planned', label: 'В планах' },
+  { id: 'completed', label: 'Просмотрено' },
+  { id: 'favorite', label: 'Любимое' },
+];
+
+export interface FavoriteAnimeItem {
+  id: string;
+  animeId: string;
+  title: string;
+  originalTitle: string;
+  posterUrl: string;
+  sourceSite: SourceSite;
+  category: FavoriteCategory;
+  rating: string;
+  year: number;
+  totalEpisodes: number;
+  addedAtIso: string;
+}
+
+export interface AnimeQueueGroup {
+  groupKey: string;
+  animeId: string;
+  animeTitle: string;
+  originalTitle: string;
+  posterUrl: string;
+  sourceSite: SourceSite;
+  artworkTheme: AnimeSeries['artworkTheme'];
+  isActiveGroup: boolean;
+  tasks: DownloadTask[];
+}
+
+export interface SavedAnimePlaylist {
+  playlistKey: string;
+  animeId: string;
+  animeTitle: string;
+  originalTitle: string;
+  posterUrl: string;
+  sourceSite: SourceSite;
+  artworkTheme: AnimeSeries['artworkTheme'];
+  totalSizeMB: number;
+  updatedAtIso: string;
+  episodes: DownloadTask[];
 }
 
 export const VOICEOVER_STUDIOS = [
@@ -1689,6 +1741,74 @@ const KNOWN_ANIME_DATABASE: KnownAnimeTemplate[] = [
       },
     ],
   },
+  {
+    keywords: [
+      'хвост феи',
+      'hvost fei',
+      'khvost fei',
+      'fairy tail',
+      'фейри тейл',
+      'нацу',
+      'нацу драгнил',
+    ],
+    slug: 'fairy-tail',
+    title: 'Хвост Феи',
+    originalTitle: 'Fairy Tail',
+    year: 2009,
+    genres: ['Сёнэн', 'Фэнтези', 'Приключения', 'Магия'],
+    rating: '8.8',
+    synopsis:
+      'Юная заклинательница звёздных духов Люси Хартфилия встречает огненного убийцу драконов Нацу Драгнила и хэппи, вступая в самую шумную и могущественную магическую гильдию королевства Фиор — «Хвост Феи».',
+    artworkTheme: 'alchemist',
+    seasons: [
+      {
+        id: 's1',
+        number: 1,
+        title: 'Сезон 1',
+        subtitle: 'Гильдия Хвост Феи и Остров Тенрю',
+        year: 2009,
+        totalEpisodes: 175,
+        episodeTitles: [
+          'Хвост Феи',
+          'Огненный дракон, Обезьяна и Бык',
+          'Проникновение в особняк Эверлу',
+          'Дорогой Каби',
+          'Волшебник в доспехах',
+          'Феи на ветру',
+          'Пламя и ветер',
+          'Сильнейшая команда!',
+        ],
+      },
+      {
+        id: 's2',
+        number: 2,
+        title: 'Сезон 2',
+        subtitle: 'Великие Магические Игры и Тартарос',
+        year: 2014,
+        totalEpisodes: 102,
+        episodeTitles: [
+          'Король драконов',
+          'Проект Затмение',
+          'Врата Будущего',
+          'Тартарос: Пролог',
+        ],
+      },
+      {
+        id: 's3',
+        number: 3,
+        title: 'Сезон 3',
+        subtitle: 'Финальный сезон и Столетний квест',
+        year: 2018,
+        totalEpisodes: 51,
+        episodeTitles: [
+          'Империя Арболес',
+          'Двенадцать Спригганов',
+          'Пламя Игнила',
+          'Столетний квест начинается',
+        ],
+      },
+    ],
+  },
 ];
 
 const TRANSLIT_WORD_MAP: Record<string, string> = {
@@ -1958,6 +2078,8 @@ export const ANIME_POSTER_CDN_MAP: Record<string, string> = {
     'https://cdn.myanimelist.net/images/anime/1584/143719l.jpg',
   'tensei-shitara-slime-datta-ken':
     'https://cdn.myanimelist.net/images/anime/1694/93337l.jpg',
+  'fairy-tail':
+    'https://cdn.myanimelist.net/images/anime/5/18179l.jpg',
 };
 
 function buildMultiSiteResultsFromTemplate(
@@ -2274,6 +2396,8 @@ export function createDownloadTask(params: {
     id,
     animeId: params.anime.id,
     animeTitle: params.anime.title,
+    originalTitle: params.anime.originalTitle,
+    posterUrl: params.anime.posterUrl,
     seasonTitle: params.seasonTitle || params.anime.seasons[0]?.title || 'Сезон 1',
     artworkTheme: params.anime.artworkTheme,
     episodeNumber: params.episode.number,
@@ -2301,6 +2425,208 @@ export function createDownloadTask(params: {
     isOfflineAvailable: false,
     updatedAtIso: new Date().toISOString(),
   };
+}
+
+/**
+ * Normalizes download queue so that:
+ * 1. Only non-completed tasks remain in the active queue.
+ * 2. Tasks are grouped by animeTitle (in the order each anime was added) and sorted by episodeNumber ascending.
+ * 3. Sequential downloading across titles: only the first anime group with non-paused tasks actively downloads
+ *    its earliest unfinished episode, while subsequent anime groups wait in 'queued' status so episodes of
+ *    different anime never mix.
+ */
+export function enforceSequentialAnimeQueue(queue: DownloadTask[]): DownloadTask[] {
+  const activeOnly = queue.filter((t) => t.status !== 'completed' && t.progressPercent < 100);
+  if (activeOnly.length === 0) return [];
+
+  const groupOrder: string[] = [];
+  const byTitle = new Map<string, DownloadTask[]>();
+
+  for (const task of activeOnly) {
+    const key = task.animeTitle.trim().toLowerCase();
+    if (!byTitle.has(key)) {
+      groupOrder.push(key);
+      byTitle.set(key, []);
+    }
+    byTitle.get(key)!.push({ ...task });
+  }
+
+  // Sort episodes inside each anime group by episodeNumber ascending
+  for (const key of groupOrder) {
+    const list = byTitle.get(key)!;
+    list.sort((a, b) => a.episodeNumber - b.episodeNumber);
+  }
+
+  // Find the first anime group that has at least one task not explicitly paused
+  const activeGroupKey =
+    groupOrder.find((key) => byTitle.get(key)!.some((t) => t.status !== 'paused')) || null;
+
+  const result: DownloadTask[] = [];
+  for (const key of groupOrder) {
+    const tasks = byTitle.get(key)!;
+    const isCurrentActiveGroup = key === activeGroupKey;
+    let foundActiveEpisodeInGroup = false;
+
+    for (const t of tasks) {
+      if (t.status === 'paused') {
+        result.push({ ...t, speedMBps: 0 });
+        continue;
+      }
+
+      if (isCurrentActiveGroup && !foundActiveEpisodeInGroup) {
+        foundActiveEpisodeInGroup = true;
+        const speed = t.quality === '2160p' ? 28.4 : t.quality === '1080p' ? 22.6 : 16.8;
+        result.push({
+          ...t,
+          status: 'downloading',
+          speedMBps: speed,
+        });
+      } else {
+        result.push({
+          ...t,
+          status: 'queued',
+          speedMBps: 0,
+        });
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Groups active queue tasks by anime title for clean visual display in the Download Queue tab.
+ */
+export function groupActiveQueueByAnime(queue: DownloadTask[]): AnimeQueueGroup[] {
+  const normalized = enforceSequentialAnimeQueue(queue);
+  const groups: AnimeQueueGroup[] = [];
+  const map = new Map<string, AnimeQueueGroup>();
+
+  for (const task of normalized) {
+    const key = task.animeTitle.trim().toLowerCase();
+    let grp = map.get(key);
+    if (!grp) {
+      grp = {
+        groupKey: key,
+        animeId: task.animeId,
+        animeTitle: task.animeTitle,
+        originalTitle: task.originalTitle || task.animeTitle,
+        posterUrl: task.posterUrl || '',
+        sourceSite: task.sourceSite,
+        artworkTheme: task.artworkTheme,
+        isActiveGroup: false,
+        tasks: [],
+      };
+      map.set(key, grp);
+      groups.push(grp);
+    }
+    if (task.status === 'downloading') {
+      grp.isActiveGroup = true;
+    }
+    grp.tasks.push(task);
+  }
+
+  return groups;
+}
+
+/**
+ * Advances active download tasks sequentially and extracts any task that reaches 100%
+ * so it moves out of the Download Queue and into the Saved Playlists tab.
+ */
+export function stepDownloadQueueSequentially(
+  queue: DownloadTask[],
+  incrementPercent = 20
+): {
+  remainingQueue: DownloadTask[];
+  newlyCompleted: DownloadTask[];
+} {
+  const normalized = enforceSequentialAnimeQueue(queue);
+  const newlyCompleted: DownloadTask[] = [];
+  const updated: DownloadTask[] = [];
+
+  for (const task of normalized) {
+    if (task.status !== 'downloading') {
+      updated.push(task);
+      continue;
+    }
+
+    const nextPercent = Math.min(100, task.progressPercent + incrementPercent);
+    const nextDownloaded = Math.round((task.sizeMB * nextPercent) / 100);
+
+    if (nextPercent >= 100) {
+      newlyCompleted.push({
+        ...task,
+        status: 'completed',
+        progressPercent: 100,
+        downloadedMB: task.sizeMB,
+        speedMBps: 0,
+        isOfflineAvailable: true,
+        updatedAtIso: new Date().toISOString(),
+      });
+    } else {
+      updated.push({
+        ...task,
+        progressPercent: nextPercent,
+        downloadedMB: nextDownloaded,
+        updatedAtIso: new Date().toISOString(),
+      });
+    }
+  }
+
+  return {
+    remainingQueue: enforceSequentialAnimeQueue(updated),
+    newlyCompleted,
+  };
+}
+
+/**
+ * Groups completed/saved episodes into per-anime playlist folders, sorted by episode number (Серия 1, Серия 2...).
+ */
+export function groupSavedEpisodesIntoPlaylists(
+  savedEpisodes: DownloadTask[]
+): SavedAnimePlaylist[] {
+  const playlists: SavedAnimePlaylist[] = [];
+  const map = new Map<string, SavedAnimePlaylist>();
+
+  for (const ep of savedEpisodes) {
+    const key = ep.animeTitle.trim().toLowerCase();
+    let pl = map.get(key);
+    if (!pl) {
+      pl = {
+        playlistKey: key,
+        animeId: ep.animeId,
+        animeTitle: ep.animeTitle,
+        originalTitle: ep.originalTitle || ep.animeTitle,
+        posterUrl: ep.posterUrl || '',
+        sourceSite: ep.sourceSite,
+        artworkTheme: ep.artworkTheme,
+        totalSizeMB: 0,
+        updatedAtIso: ep.updatedAtIso,
+        episodes: [],
+      };
+      map.set(key, pl);
+      playlists.push(pl);
+    }
+
+    // Deduplicate by season + episode number
+    const existsIdx = pl.episodes.findIndex(
+      (x) =>
+        x.episodeNumber === ep.episodeNumber &&
+        (x.seasonTitle || 'Сезон 1') === (ep.seasonTitle || 'Сезон 1')
+    );
+    if (existsIdx >= 0) {
+      pl.episodes[existsIdx] = ep;
+    } else {
+      pl.episodes.push(ep);
+    }
+  }
+
+  for (const pl of playlists) {
+    pl.episodes.sort((a, b) => a.episodeNumber - b.episodeNumber);
+    pl.totalSizeMB = pl.episodes.reduce((acc, item) => acc + (item.sizeMB || 0), 0);
+  }
+
+  return playlists;
 }
 
 export function calculateQueueMetrics(queue: DownloadTask[]): {

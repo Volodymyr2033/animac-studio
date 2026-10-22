@@ -17,6 +17,10 @@ import {
   calculateQueueMetrics,
   formatTimecode,
   DEFAULT_PLAYER_ANIME_LIST,
+  enforceSequentialAnimeQueue,
+  groupActiveQueueByAnime,
+  stepDownloadQueueSequentially,
+  groupSavedEpisodesIntoPlaylists,
 } from './animeEngine.ts';
 
 test('URL slug cleaner strips numeric IDs, technical suffixes, and resolves clean Russian + Romaji titles', () => {
@@ -238,4 +242,81 @@ test('Poster resolution maps Tensei shitara Slime Datta Ken accurately and never
   assert.equal(customQuery.results[0].posterUrl, '');
   assert.equal(customQuery.results[0].posterUrl.includes('88336l'), false);
 });
+
+test('Sequential anime download queue downloads one anime group at a time and moves completed episodes into Saved Playlists', () => {
+  const fairyTail = searchAnimeAcrossSites('Хвост Феи').results[0];
+  const onePiece = searchAnimeAcrossSites('Ван-Пис').results[0];
+
+  const ftEp1 = createDownloadTask({
+    anime: fairyTail,
+    episode: fairyTail.episodes[0],
+    voiceover: 'AniLibria',
+    quality: '1080p',
+    platform: 'macos',
+  });
+  const ftEp2 = createDownloadTask({
+    anime: fairyTail,
+    episode: fairyTail.episodes[1],
+    voiceover: 'AniLibria',
+    quality: '1080p',
+    platform: 'macos',
+  });
+  const opEp1 = createDownloadTask({
+    anime: onePiece,
+    episode: onePiece.episodes[0],
+    voiceover: 'AniLibria',
+    quality: '1080p',
+    platform: 'macos',
+  });
+
+  // Enforce sequential queue: only Fairy Tail ep 1 should be 'downloading', Fairy Tail ep 2 and One Piece ep 1 should be 'queued'
+  const enforced = enforceSequentialAnimeQueue([ftEp1, ftEp2, opEp1]);
+  assert.equal(enforced[0].status, 'downloading');
+  assert.equal(enforced[1].status, 'queued');
+  assert.equal(enforced[2].status, 'queued');
+
+  const groups = groupActiveQueueByAnime(enforced);
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].animeTitle, 'Хвост Феи');
+  assert.equal(groups[0].isActiveGroup, true);
+  assert.equal(groups[1].animeTitle, 'Ван-Пис');
+  assert.equal(groups[1].isActiveGroup, false);
+
+  // Step Fairy Tail Ep 1 to 100%: it should move out of remainingQueue and into newlyCompleted
+  const nearlyDone = enforced.map((t, idx) => (idx === 0 ? { ...t, progressPercent: 95 } : t));
+  const stepped1 = stepDownloadQueueSequentially(nearlyDone, 10);
+  assert.equal(stepped1.newlyCompleted.length, 1);
+  assert.equal(stepped1.newlyCompleted[0].animeTitle, 'Хвост Феи');
+  assert.equal(stepped1.newlyCompleted[0].episodeNumber, 1);
+  // Fairy Tail Ep 2 is now promoted to 'downloading', while One Piece Ep 1 remains 'queued'
+  assert.equal(stepped1.remainingQueue.length, 2);
+  assert.equal(stepped1.remainingQueue[0].animeTitle, 'Хвост Феи');
+  assert.equal(stepped1.remainingQueue[0].episodeNumber, 2);
+  assert.equal(stepped1.remainingQueue[0].status, 'downloading');
+  assert.equal(stepped1.remainingQueue[1].animeTitle, 'Ван-Пис');
+  assert.equal(stepped1.remainingQueue[1].status, 'queued');
+
+  // Complete Fairy Tail Ep 2 -> One Piece Ep 1 automatically becomes 'downloading'
+  const ftEp2NearlyDone = stepped1.remainingQueue.map((t, idx) =>
+    idx === 0 ? { ...t, progressPercent: 95 } : t
+  );
+  const stepped2 = stepDownloadQueueSequentially(ftEp2NearlyDone, 10);
+  assert.equal(stepped2.newlyCompleted.length, 1);
+  assert.equal(stepped2.newlyCompleted[0].episodeNumber, 2);
+  assert.equal(stepped2.remainingQueue.length, 1);
+  assert.equal(stepped2.remainingQueue[0].animeTitle, 'Ван-Пис');
+  assert.equal(stepped2.remainingQueue[0].status, 'downloading');
+
+  // Saved playlists group completed episodes by anime and sort episodes ascending
+  const savedPlaylists = groupSavedEpisodesIntoPlaylists([
+    ...stepped2.newlyCompleted,
+    ...stepped1.newlyCompleted,
+  ]);
+  assert.equal(savedPlaylists.length, 1);
+  assert.equal(savedPlaylists[0].animeTitle, 'Хвост Феи');
+  assert.equal(savedPlaylists[0].episodes.length, 2);
+  assert.equal(savedPlaylists[0].episodes[0].episodeNumber, 1);
+  assert.equal(savedPlaylists[0].episodes[1].episodeNumber, 2);
+});
+
 

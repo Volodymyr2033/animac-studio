@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import {
   Play,
@@ -7,8 +7,8 @@ import {
   VolumeX,
   SkipForward,
   SkipBack,
+  FastForward,
   Download,
-  ShieldCheck,
   FolderDown,
   Search,
   Maximize2,
@@ -16,17 +16,64 @@ import {
   Loader2,
   Layers,
   ExternalLink,
+  Heart,
+  CaptionsOff,
+  Captions,
+  Tv,
+  Radio,
 } from 'lucide-react';
 import {
   AnimeSeason,
   AnimeSeries,
   EpisodeInfo,
+  FAVORITE_CATEGORIES,
+  FavoriteCategory,
   VIDEO_QUALITIES,
   buildEpisodeRangeGroups,
   formatTimecode,
 } from '../utils/animeEngine';
 import { VideoQuality } from '../utils/security';
 import { AnimeArtwork } from './AnimeArtwork';
+
+const TIMECODE_STORAGE_KEY = 'animac_timecodes_v2';
+
+export function getSavedEpisodeTimecode(
+  animeTitle: string,
+  seasonId: string,
+  episodeNumber: number
+): number {
+  try {
+    const raw = localStorage.getItem(TIMECODE_STORAGE_KEY);
+    if (!raw) return 0;
+    const map = JSON.parse(raw) as Record<string, number>;
+    const key = `${animeTitle.trim().toLowerCase()}::${seasonId}::${episodeNumber}`;
+    const val = Number(map[key]);
+    return Number.isFinite(val) && val > 0 ? val : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function saveEpisodeTimecode(
+  animeTitle: string,
+  seasonId: string,
+  episodeNumber: number,
+  seconds: number
+): void {
+  try {
+    const raw = localStorage.getItem(TIMECODE_STORAGE_KEY);
+    const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+    const key = `${animeTitle.trim().toLowerCase()}::${seasonId}::${episodeNumber}`;
+    if (seconds <= 0) {
+      delete map[key];
+    } else {
+      map[key] = Math.floor(seconds);
+    }
+    localStorage.setItem(TIMECODE_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
 
 interface VideoPlayerViewProps {
   anime: AnimeSeries;
@@ -35,7 +82,11 @@ interface VideoPlayerViewProps {
   voiceover: string;
   quality: VideoQuality;
   initialProgressSeconds: number;
-  isOfflineCached: boolean;
+  isOfflineCached?: boolean;
+  favoriteCategory?: FavoriteCategory | null;
+  onToggleFavorite?: (anime: AnimeSeries, category?: FavoriteCategory) => void;
+  playlistEpisodes?: EpisodeInfo[] | null;
+  onClearPlaylistMode?: () => void;
   onSelectSeason: (season: AnimeSeason) => void;
   onSelectEpisode: (ep: EpisodeInfo) => void;
   onChangeVoiceover: (vo: string) => void;
@@ -55,6 +106,10 @@ export interface AniLibriaEpisodeStream {
   episode: number;
   name: string;
   durationSeconds: number;
+  openingSkip?: {
+    start: number;
+    stop: number;
+  } | null;
   hls: {
     fhd: string | null;
     hd: string | null;
@@ -64,6 +119,7 @@ export interface AniLibriaEpisodeStream {
 
 export interface AniLibriaTitlePlayerPayload {
   releaseId: number | string;
+  releaseCode: string;
   releaseTitle: string;
   host: string;
   episodes: AniLibriaEpisodeStream[];
@@ -73,40 +129,201 @@ export interface AniLibriaTitlePlayerPayload {
 const aniLibriaStreamCache = new Map<string, AniLibriaTitlePlayerPayload>();
 
 /**
- * Direct release ID mapping on AniLibria for popular titles where Russian/Romaji spelling varies
+ * Exact AniLibria release codes and Shikimori IDs for popular anime titles
+ * as specified in the technical requirements.
  */
-const KNOWN_ANILIBRIA_RELEASE_IDS: Record<string, number> = {
-  'о моём перерождении в слизь': 8950,
-  'о моем перерождении в слизь': 8950,
-  'перерождение в слизь': 8950,
-  'слизь': 8950,
-  'tensei shitara slime datta ken': 8950,
-  'магическая битва': 8789,
-  'jujutsu kaisen': 8789,
-  'клинок, рассекающий демонов': 8325,
-  'клинок рассекающий демонов': 8325,
-  'клинок': 8325,
-  'kimetsu no yaiba': 8325,
-  'провожающая в последний путь фрирен': 9542,
-  'фрирен': 9542,
-  'sousou no frieren': 9542,
-  'поднятие уровня в одиночку': 9600,
-  'соло левелинг': 9600,
-  'solo leveling': 9600,
-  'дандадан': 9789,
-  'dandadan': 9789,
-  'семья шпиона': 9161,
-  'spy x family': 9161,
-  'звёздное дитя': 9420,
-  'звездное дитя': 9420,
-  'oshi no ko': 9420,
-  'блич: тысячелетняя кровавая война': 8452,
-  'блич': 8452,
-  'bleach': 8452,
-  'чёрный клевер': 5152,
-  'черный клевер': 5152,
-  'black clover': 5152,
+interface ExactAnimeCatalogMeta {
+  anilibriaCode: string;
+  anilibriaId?: number;
+  shikimoriId: number;
+  matchTokens: string[];
+}
+
+export const EXACT_ANIME_CATALOG_MAP: Record<string, ExactAnimeCatalogMeta> = {
+  'человек-бензопила': {
+    anilibriaCode: 'chainsaw-man',
+    shikimoriId: 44511,
+    matchTokens: ['chainsaw', 'бензопил'],
+  },
+  'chainsaw man': {
+    anilibriaCode: 'chainsaw-man',
+    shikimoriId: 44511,
+    matchTokens: ['chainsaw', 'бензопил'],
+  },
+  'о моём перерождении в слизь': {
+    anilibriaCode: 'tensei-shitara-slime-datta-ken',
+    anilibriaId: 8950,
+    shikimoriId: 37430,
+    matchTokens: ['slime', 'tensura', 'слиз'],
+  },
+  'о моем перерождении в слизь': {
+    anilibriaCode: 'tensei-shitara-slime-datta-ken',
+    anilibriaId: 8950,
+    shikimoriId: 37430,
+    matchTokens: ['slime', 'tensura', 'слиз'],
+  },
+  'tensei shitara slime datta ken': {
+    anilibriaCode: 'tensei-shitara-slime-datta-ken',
+    anilibriaId: 8950,
+    shikimoriId: 37430,
+    matchTokens: ['slime', 'tensura', 'слиз'],
+  },
+  'магическая битва': {
+    anilibriaCode: 'jujutsu-kaisen',
+    anilibriaId: 8789,
+    shikimoriId: 40748,
+    matchTokens: ['jujutsu', 'магическ'],
+  },
+  'jujutsu kaisen': {
+    anilibriaCode: 'jujutsu-kaisen',
+    anilibriaId: 8789,
+    shikimoriId: 40748,
+    matchTokens: ['jujutsu', 'магическ'],
+  },
+  'чёрный клевер': {
+    anilibriaCode: 'black-clover',
+    anilibriaId: 5152,
+    shikimoriId: 34572,
+    matchTokens: ['clover', 'клевер'],
+  },
+  'черный клевер': {
+    anilibriaCode: 'black-clover',
+    anilibriaId: 5152,
+    shikimoriId: 34572,
+    matchTokens: ['clover', 'клевер'],
+  },
+  'black clover': {
+    anilibriaCode: 'black-clover',
+    anilibriaId: 5152,
+    shikimoriId: 34572,
+    matchTokens: ['clover', 'клевер'],
+  },
+  'клинок, рассекающий демонов': {
+    anilibriaCode: 'kimetsu-no-yaiba',
+    anilibriaId: 8325,
+    shikimoriId: 38000,
+    matchTokens: ['kimetsu', 'рассекающ', 'demon slayer'],
+  },
+  'kimetsu no yaiba': {
+    anilibriaCode: 'kimetsu-no-yaiba',
+    anilibriaId: 8325,
+    shikimoriId: 38000,
+    matchTokens: ['kimetsu', 'рассекающ', 'demon slayer'],
+  },
+  'провожающая в последний путь фрирен': {
+    anilibriaCode: 'sousou-no-frieren',
+    anilibriaId: 9542,
+    shikimoriId: 52991,
+    matchTokens: ['frieren', 'фрирен'],
+  },
+  'sousou no frieren': {
+    anilibriaCode: 'sousou-no-frieren',
+    anilibriaId: 9542,
+    shikimoriId: 52991,
+    matchTokens: ['frieren', 'фрирен'],
+  },
+  'поднятие уровня в одиночку': {
+    anilibriaCode: 'ore-dake-level-up-na-ken',
+    anilibriaId: 9600,
+    shikimoriId: 52299,
+    matchTokens: ['level up', 'leveling', 'поднятие уровня', 'соло левелинг'],
+  },
+  'соло левелинг': {
+    anilibriaCode: 'ore-dake-level-up-na-ken',
+    anilibriaId: 9600,
+    shikimoriId: 52299,
+    matchTokens: ['level up', 'leveling', 'поднятие уровня', 'соло левелинг'],
+  },
+  'solo leveling': {
+    anilibriaCode: 'ore-dake-level-up-na-ken',
+    anilibriaId: 9600,
+    shikimoriId: 52299,
+    matchTokens: ['level up', 'leveling', 'поднятие уровня', 'соло левелинг'],
+  },
+  'монолог фармацевта': {
+    anilibriaCode: 'kusuriya-no-hitorigoto',
+    shikimoriId: 54492,
+    matchTokens: ['kusuriya', 'hitorigoto', 'монолог фармацевта', 'apothecary'],
+  },
+  'kusuriya no hitorigoto': {
+    anilibriaCode: 'kusuriya-no-hitorigoto',
+    shikimoriId: 54492,
+    matchTokens: ['kusuriya', 'hitorigoto', 'монолог фармацевта', 'apothecary'],
+  },
+  'атака титанов': {
+    anilibriaCode: 'shingeki-no-kyojin',
+    shikimoriId: 16498,
+    matchTokens: ['kyojin', 'атака титанов', 'attack on titan'],
+  },
+  'shingeki no kyojin': {
+    anilibriaCode: 'shingeki-no-kyojin',
+    shikimoriId: 16498,
+    matchTokens: ['kyojin', 'атака титанов', 'attack on titan'],
+  },
+  'ван-пис': {
+    anilibriaCode: 'one-piece',
+    anilibriaId: 10290,
+    shikimoriId: 21,
+    matchTokens: ['one piece', 'ван-пис', 'ван пис'],
+  },
+  'блич: тысячелетняя кровавая война': {
+    anilibriaCode: 'bleach',
+    anilibriaId: 8452,
+    shikimoriId: 41467,
+    matchTokens: ['bleach', 'блич'],
+  },
+  'наруто: ураганные хроники': {
+    anilibriaCode: 'naruto-shippuuden-naruto-uragannye-khroniki',
+    anilibriaId: 413,
+    shikimoriId: 1735,
+    matchTokens: ['naruto', 'наруто'],
+  },
+  'синяя тюрьма: блю лок': {
+    anilibriaCode: 'blue-lock',
+    shikimoriId: 49596,
+    matchTokens: ['blue lock', 'блю лок', 'синяя тюрьма'],
+  },
+  'семья шпиона': {
+    anilibriaCode: 'spy-x-family',
+    anilibriaId: 9161,
+    shikimoriId: 50265,
+    matchTokens: ['spy', 'шпиона'],
+  },
+  'звёздное дитя': {
+    anilibriaCode: 'oshi-no-ko',
+    anilibriaId: 9420,
+    shikimoriId: 52034,
+    matchTokens: ['oshi no ko', 'звёздное дитя', 'звездное дитя'],
+  },
+  'дандадан': {
+    anilibriaCode: 'dandadan',
+    anilibriaId: 9789,
+    shikimoriId: 57334,
+    matchTokens: ['dandadan', 'дандадан'],
+  },
+  'хвост феи': {
+    anilibriaCode: 'fairy-tail',
+    shikimoriId: 6702,
+    matchTokens: ['fairy tail', 'хвост феи'],
+  },
 };
+
+export function resolveCatalogMeta(
+  animeTitle: string,
+  originalTitle: string
+): ExactAnimeCatalogMeta | null {
+  const ruNorm = animeTitle.trim().toLowerCase();
+  const enNorm = originalTitle.split('/')[0].trim().toLowerCase();
+  if (EXACT_ANIME_CATALOG_MAP[ruNorm]) return EXACT_ANIME_CATALOG_MAP[ruNorm];
+  if (EXACT_ANIME_CATALOG_MAP[enNorm]) return EXACT_ANIME_CATALOG_MAP[enNorm];
+
+  for (const [key, meta] of Object.entries(EXACT_ANIME_CATALOG_MAP)) {
+    if (ruNorm.includes(key) || enNorm.includes(key)) {
+      return meta;
+    }
+  }
+  return null;
+}
 
 function normalizeHlsUrl(host: string, rawPath: string | null | undefined): string | null {
   if (!rawPath || typeof rawPath !== 'string') return null;
@@ -119,8 +336,145 @@ function normalizeHlsUrl(host: string, rawPath: string | null | undefined): stri
 }
 
 /**
- * Queries AniLibria API v3 (`https://api.anilibria.tv/v3/title?search=...`)
- * and live AniLibria v1 mirror (`https://anilibria.top/api/v1/...`) to retrieve real HLS (.m3u8) streams.
+ * Strictly checks whether a candidate AniLibria release object actually matches the requested anime,
+ * preventing fuzzy search results (e.g. "Человек, выбранный богами") from matching "Человек-бензопила".
+ */
+function doesReleaseMatchAnime(
+  candidate: {
+    code?: string;
+    alias?: string;
+    nameRus?: string;
+    nameEng?: string;
+  },
+  animeTitle: string,
+  originalTitle: string,
+  catalogMeta: ExactAnimeCatalogMeta | null
+): boolean {
+  const codeOrAlias = (candidate.code || candidate.alias || '').toLowerCase();
+  const rus = (candidate.nameRus || '').toLowerCase();
+  const eng = (candidate.nameEng || '').toLowerCase();
+  const combined = `${codeOrAlias} ${rus} ${eng}`;
+
+  if (catalogMeta) {
+    if (codeOrAlias === catalogMeta.anilibriaCode) return true;
+    return catalogMeta.matchTokens.some((tok) => combined.includes(tok.toLowerCase()));
+  }
+
+  const significantWords = `${animeTitle} ${originalTitle.split('/')[0]}`
+    .toLowerCase()
+    .replace(/[^a-zа-яё0-9\s]/gi, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !['сезон', 'season', 'anime', 'аниме', 'часть'].includes(w));
+
+  if (significantWords.length === 0) return true;
+  const matchedCount = significantWords.filter((w) => combined.includes(w)).length;
+  return matchedCount >= Math.min(2, significantWords.length);
+}
+
+function parseV3TitleObject(
+  titleObj: Record<string, unknown>,
+  fallbackTitle: string
+): AniLibriaTitlePlayerPayload | null {
+  const player = titleObj?.player as Record<string, unknown> | undefined;
+  const host = (typeof player?.host === 'string' && player.host) || 'cache.libria.fun';
+  const rawList = player?.list;
+  if (!rawList || typeof rawList !== 'object') return null;
+
+  const entries = Array.isArray(rawList) ? rawList : Object.values(rawList);
+  const episodes: AniLibriaEpisodeStream[] = entries
+    .map((ep: Record<string, unknown>, idx: number) => {
+      const hlsObj = (ep?.hls || {}) as Record<string, string | null>;
+      const skipsObj = (ep?.skips || {}) as Record<string, number[]>;
+      const opArr = Array.isArray(skipsObj?.opening) ? skipsObj.opening : null;
+      const openingSkip =
+        opArr && opArr.length >= 2 && Number.isFinite(opArr[0]) && Number.isFinite(opArr[1])
+          ? { start: Number(opArr[0]), stop: Number(opArr[1]) }
+          : null;
+
+      const epNum = Number(ep?.episode || ep?.ordinal || idx + 1);
+      const fhd = normalizeHlsUrl(host, hlsObj.fhd);
+      const hd = normalizeHlsUrl(host, hlsObj.hd);
+      const sd = normalizeHlsUrl(host, hlsObj.sd);
+      return {
+        episode: epNum,
+        name: typeof ep?.name === 'string' && ep.name ? ep.name : `Серия ${epNum}`,
+        durationSeconds: 1440,
+        openingSkip,
+        hls: {
+          fhd: fhd || hd || sd,
+          hd: hd || fhd || sd,
+          sd: sd || hd || fhd,
+        },
+      };
+    })
+    .filter((e) => e.hls.fhd || e.hls.hd || e.hls.sd)
+    .sort((a, b) => a.episode - b.episode);
+
+  if (episodes.length === 0) return null;
+  const namesObj = (titleObj?.names || {}) as Record<string, string>;
+  return {
+    releaseId: (titleObj?.id as number | string) || fallbackTitle,
+    releaseCode: (titleObj?.code as string) || '',
+    releaseTitle: namesObj.ru || fallbackTitle,
+    host,
+    episodes,
+  };
+}
+
+function parseV1ReleaseObject(
+  relData: Record<string, unknown>,
+  fallbackTitle: string
+): AniLibriaTitlePlayerPayload | null {
+  const rawEpisodes = Array.isArray(relData?.episodes) ? relData.episodes : [];
+  const host = 'cache.libria.fun';
+
+  const episodes: AniLibriaEpisodeStream[] = rawEpisodes
+    .map((ep: Record<string, unknown>, idx: number) => {
+      const epNum = Math.round(Number(ep?.ordinal || ep?.sort_order || idx + 1));
+      const fhd = normalizeHlsUrl(host, ep?.hls_1080 as string | null);
+      const hd = normalizeHlsUrl(host, ep?.hls_720 as string | null);
+      const sd = normalizeHlsUrl(host, ep?.hls_480 as string | null);
+      const opObj = ep?.opening as { start?: number; stop?: number } | undefined;
+      const openingSkip =
+        opObj && Number.isFinite(opObj.start) && Number.isFinite(opObj.stop)
+          ? { start: Number(opObj.start), stop: Number(opObj.stop) }
+          : null;
+
+      return {
+        episode: epNum,
+        name:
+          typeof ep?.name === 'string' && ep.name.trim().length > 0
+            ? ep.name
+            : `Серия ${epNum}`,
+        durationSeconds: Number(ep?.duration) || 1440,
+        openingSkip,
+        hls: {
+          fhd: fhd || hd || sd,
+          hd: hd || fhd || sd,
+          sd: sd || hd || fhd,
+        },
+      };
+    })
+    .filter((e: AniLibriaEpisodeStream) => e.hls.fhd || e.hls.hd || e.hls.sd)
+    .sort((a: AniLibriaEpisodeStream, b: AniLibriaEpisodeStream) => a.episode - b.episode);
+
+  if (episodes.length === 0) return null;
+  const nameObj = (relData?.name || {}) as Record<string, string>;
+  return {
+    releaseId: (relData?.id as number | string) || fallbackTitle,
+    releaseCode: (relData?.alias as string) || '',
+    releaseTitle: nameObj.main || fallbackTitle,
+    host,
+    episodes,
+  };
+}
+
+/**
+ * Fetches the exact AniLibria HLS stream manifest for the selected anime:
+ * Step 1: Exact code lookup (`https://api.anilibria.tv/v3/title?code=${code}` or verified v1 release ID).
+ * Step 2: Title search (`https://api.anilibria.tv/v3/title/search?search=${encodeURIComponent(query)}&limit=5`
+ *         and `https://anilibria.top/api/v1/app/search/releases?query=${encodeURIComponent(query)}`),
+ *         strictly verifying that the returned release matches the requested anime.
  */
 async function fetchAniLibriaPlayerData(
   animeTitle: string,
@@ -129,6 +483,48 @@ async function fetchAniLibriaPlayerData(
   const cacheKey = `${animeTitle.toLowerCase()}::${originalTitle.toLowerCase()}`;
   const cached = aniLibriaStreamCache.get(cacheKey);
   if (cached) return cached;
+
+  const catalogMeta = resolveCatalogMeta(animeTitle, originalTitle);
+
+  // Step 1A: If we have a verified AniLibria release ID on anilibria.top/api/v1, fetch it directly
+  if (catalogMeta?.anilibriaId) {
+    try {
+      const relRes = await fetch(
+        `https://anilibria.top/api/v1/anime/releases/${catalogMeta.anilibriaId}`,
+        { signal: AbortSignal.timeout(4000) }
+      );
+      if (relRes.ok) {
+        const relData = (await relRes.json()) as Record<string, unknown>;
+        const parsed = parseV1ReleaseObject(relData, animeTitle);
+        if (parsed) {
+          aniLibriaStreamCache.set(cacheKey, parsed);
+          return parsed;
+        }
+      }
+    } catch {
+      // Continue to next method
+    }
+  }
+
+  // Step 1B: Try exact AniLibria code via v3 API: https://api.anilibria.tv/v3/title?code=${code}
+  if (catalogMeta?.anilibriaCode) {
+    try {
+      const codeRes = await fetch(
+        `https://api.anilibria.tv/v3/title?code=${encodeURIComponent(catalogMeta.anilibriaCode)}`,
+        { signal: AbortSignal.timeout(3000) }
+      );
+      if (codeRes.ok) {
+        const codeData = (await codeRes.json()) as Record<string, unknown>;
+        const parsed = parseV3TitleObject(codeData, animeTitle);
+        if (parsed) {
+          aniLibriaStreamCache.set(cacheKey, parsed);
+          return parsed;
+        }
+      }
+    } catch {
+      // Continue to search
+    }
+  }
 
   const queriesToTry = Array.from(
     new Set(
@@ -140,123 +536,79 @@ async function fetchAniLibriaPlayerData(
     )
   );
 
-  // 1. Query live AniLibria API (anilibria.top/api/v1) which serves cache.libria.fun HLS streams
-  let targetReleaseId: number | null =
-    KNOWN_ANILIBRIA_RELEASE_IDS[animeTitle.trim().toLowerCase()] ||
-    KNOWN_ANILIBRIA_RELEASE_IDS[originalTitle.split('/')[0].trim().toLowerCase()] ||
-    null;
-
-  if (!targetReleaseId) {
-    for (const q of queriesToTry) {
-      try {
-        const searchRes = await fetch(
-          `https://anilibria.top/api/v1/app/search/releases?query=${encodeURIComponent(q)}`,
-          { signal: AbortSignal.timeout(4000) }
-        );
-        if (searchRes.ok) {
-          const searchList = await searchRes.json();
-          if (Array.isArray(searchList) && searchList.length > 0 && searchList[0]?.id) {
-            targetReleaseId = Number(searchList[0].id);
-            break;
-          }
-        }
-      } catch {
-        // Ignore and try next query
-      }
-    }
-  }
-
-  if (targetReleaseId) {
+  // Step 2A: Search on live AniLibria v1 API with strict title verification
+  for (const q of queriesToTry) {
     try {
-      const releaseRes = await fetch(
-        `https://anilibria.top/api/v1/anime/releases/${targetReleaseId}`,
-        { signal: AbortSignal.timeout(4500) }
+      const searchRes = await fetch(
+        `https://anilibria.top/api/v1/app/search/releases?query=${encodeURIComponent(q)}`,
+        { signal: AbortSignal.timeout(4000) }
       );
-      if (releaseRes.ok) {
-        const relData = await releaseRes.json();
-        const rawEpisodes = Array.isArray(relData?.episodes) ? relData.episodes : [];
-        const host = 'cache.libria.fun';
-
-        const episodes: AniLibriaEpisodeStream[] = rawEpisodes
-          .map((ep: Record<string, unknown>, idx: number) => {
-            const epNum = Math.round(Number(ep?.ordinal || ep?.sort_order || idx + 1));
-            const fhd = normalizeHlsUrl(host, ep?.hls_1080 as string | null);
-            const hd = normalizeHlsUrl(host, ep?.hls_720 as string | null);
-            const sd = normalizeHlsUrl(host, ep?.hls_480 as string | null);
-            return {
-              episode: epNum,
-              name:
-                typeof ep?.name === 'string' && ep.name.trim().length > 0
-                  ? ep.name
-                  : `Серия ${epNum}`,
-              durationSeconds: Number(ep?.duration) || 1440,
-              hls: {
-                fhd: fhd || hd || sd,
-                hd: hd || fhd || sd,
-                sd: sd || hd || fhd,
+      if (searchRes.ok) {
+        const searchList = await searchRes.json();
+        if (Array.isArray(searchList) && searchList.length > 0) {
+          const verifiedMatch = searchList.find((item: Record<string, unknown>) => {
+            const nameObj = (item?.name || {}) as Record<string, string>;
+            return doesReleaseMatchAnime(
+              {
+                alias: item?.alias as string,
+                nameRus: nameObj.main,
+                nameEng: nameObj.english,
               },
-            };
-          })
-          .filter((e: AniLibriaEpisodeStream) => e.hls.fhd || e.hls.hd || e.hls.sd)
-          .sort((a: AniLibriaEpisodeStream, b: AniLibriaEpisodeStream) => a.episode - b.episode);
+              animeTitle,
+              originalTitle,
+              catalogMeta
+            );
+          });
 
-        if (episodes.length > 0) {
-          const payload: AniLibriaTitlePlayerPayload = {
-            releaseId: targetReleaseId,
-            releaseTitle: relData?.name?.main || animeTitle,
-            host,
-            episodes,
-          };
-          aniLibriaStreamCache.set(cacheKey, payload);
-          return payload;
+          if (verifiedMatch?.id) {
+            const releaseRes = await fetch(
+              `https://anilibria.top/api/v1/anime/releases/${verifiedMatch.id}`,
+              { signal: AbortSignal.timeout(4500) }
+            );
+            if (releaseRes.ok) {
+              const relData = (await releaseRes.json()) as Record<string, unknown>;
+              const parsed = parseV1ReleaseObject(relData, animeTitle);
+              if (parsed) {
+                aniLibriaStreamCache.set(cacheKey, parsed);
+                return parsed;
+              }
+            }
+          }
         }
       }
     } catch {
-      // Proceed to v3 fallback if v1 release details failed
+      // Ignore and try next query
     }
   }
 
-  // 2. Fallback to AniLibria API v3 endpoint: https://api.anilibria.tv/v3/title?search=${encodeURIComponent(animeTitle)}
+  // Step 2B: Search on AniLibria v3 API: https://api.anilibria.tv/v3/title/search?search=${encodeURIComponent(query)}&limit=5
   for (const q of queriesToTry) {
     try {
-      const v3Res = await fetch(
-        `https://api.anilibria.tv/v3/title?search=${encodeURIComponent(q)}`,
+      const v3SearchRes = await fetch(
+        `https://api.anilibria.tv/v3/title/search?search=${encodeURIComponent(q)}&limit=5`,
         { signal: AbortSignal.timeout(3000) }
       );
-      if (v3Res.ok) {
-        const v3Data = await v3Res.json();
-        const titleObj = Array.isArray(v3Data?.list) ? v3Data.list[0] : v3Data;
-        const host = titleObj?.player?.host || 'cache.libria.fun';
-        const rawList = titleObj?.player?.list;
-        if (rawList && typeof rawList === 'object') {
-          const entries = Array.isArray(rawList) ? rawList : Object.values(rawList);
-          const episodes: AniLibriaEpisodeStream[] = entries
-            .map((ep: Record<string, unknown>, idx: number) => {
-              const hlsObj = (ep?.hls || {}) as Record<string, string | null>;
-              const epNum = Number(ep?.episode || ep?.ordinal || idx + 1);
-              return {
-                episode: epNum,
-                name: typeof ep?.name === 'string' && ep.name ? ep.name : `Серия ${epNum}`,
-                durationSeconds: 1440,
-                hls: {
-                  fhd: normalizeHlsUrl(host, hlsObj.fhd),
-                  hd: normalizeHlsUrl(host, hlsObj.hd),
-                  sd: normalizeHlsUrl(host, hlsObj.sd),
-                },
-              };
-            })
-            .filter((e) => e.hls.fhd || e.hls.hd || e.hls.sd)
-            .sort((a, b) => a.episode - b.episode);
-
-          if (episodes.length > 0) {
-            const payload: AniLibriaTitlePlayerPayload = {
-              releaseId: titleObj.id || q,
-              releaseTitle: titleObj?.names?.ru || animeTitle,
-              host,
-              episodes,
-            };
-            aniLibriaStreamCache.set(cacheKey, payload);
-            return payload;
+      if (v3SearchRes.ok) {
+        const v3Data = (await v3SearchRes.json()) as { list?: Record<string, unknown>[] };
+        const list = Array.isArray(v3Data?.list) ? v3Data.list : [];
+        const verifiedItem = list.find((item) => {
+          const namesObj = (item?.names || {}) as Record<string, string>;
+          return doesReleaseMatchAnime(
+            {
+              code: item?.code as string,
+              nameRus: namesObj.ru,
+              nameEng: namesObj.en,
+            },
+            animeTitle,
+            originalTitle,
+            catalogMeta
+          );
+        });
+        if (verifiedItem) {
+          const parsed = parseV3TitleObject(verifiedItem, animeTitle);
+          if (parsed) {
+            aniLibriaStreamCache.set(cacheKey, parsed);
+            return parsed;
           }
         }
       }
@@ -275,7 +627,10 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   voiceover,
   quality,
   initialProgressSeconds,
-  isOfflineCached,
+  favoriteCategory = null,
+  onToggleFavorite,
+  playlistEpisodes = null,
+  onClearPlaylistMode,
   onSelectSeason,
   onSelectEpisode,
   onChangeVoiceover,
@@ -287,21 +642,70 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const hlsInstanceRef = useRef<Hls | null>(null);
-  const resumeTimeRef = useRef<number>(initialProgressSeconds || 0);
+
+  const initialResolvedTime = useMemo(() => {
+    if (initialProgressSeconds && initialProgressSeconds > 0) {
+      return initialProgressSeconds;
+    }
+    return getSavedEpisodeTimecode(anime.title, season.id, episode.number);
+  }, [anime.title, season.id, episode.number, initialProgressSeconds]);
+
+  const resumeTimeRef = useRef<number>(initialResolvedTime);
+  const autoPlayOnNextLoadRef = useRef<boolean>(false);
+
+  // Source Mode: 'hls' (Direct AniLibria HLS 1080p) vs 'multi' (Multi-Voiceover Embed Player by Shikimori ID / Title)
+  const [playerSourceMode, setPlayerSourceMode] = useState<'hls' | 'multi'>('hls');
+  const [resolvedShikimoriId, setResolvedShikimoriId] = useState<number | null>(null);
 
   const [isLoadingStream, setIsLoadingStream] = useState<boolean>(true);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [playerData, setPlayerData] = useState<AniLibriaTitlePlayerPayload | null>(null);
 
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [currentTime, setCurrentTime] = useState<number>(initialProgressSeconds || 0);
+  const [currentTime, setCurrentTime] = useState<number>(initialResolvedTime);
   const [duration, setDuration] = useState<number>(episode.durationSeconds || 1440);
   const [volume, setVolume] = useState<number>(1);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
+  // Subtitles MUST be OFF by default
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState<boolean>(false);
 
   const [activeRangeIndex, setActiveRangeIndex] = useState<number>(0);
   const [episodeNumberFilter, setEpisodeNumberFilter] = useState<string>('');
+
+  const catalogMeta = useMemo(
+    () => resolveCatalogMeta(anime.title, anime.originalTitle),
+    [anime.title, anime.originalTitle]
+  );
+
+  // Resolve Shikimori / MAL ID dynamically for any anime not in EXACT_ANIME_CATALOG_MAP
+  useEffect(() => {
+    if (catalogMeta?.shikimoriId) {
+      setResolvedShikimoriId(catalogMeta.shikimoriId);
+      return;
+    }
+    let cancelled = false;
+    const q = anime.originalTitle.split('/')[0].trim() || anime.title;
+    fetch(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(q)}&limit=1`, {
+      signal: AbortSignal.timeout(4000),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return;
+        const malId = Number(d?.data?.[0]?.mal_id);
+        if (Number.isFinite(malId) && malId > 0) {
+          setResolvedShikimoriId(malId);
+        } else {
+          setResolvedShikimoriId(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setResolvedShikimoriId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [anime.title, anime.originalTitle, catalogMeta]);
 
   // Fetch real AniLibria HLS streams when anime changes
   useEffect(() => {
@@ -361,8 +765,26 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     );
   }, [activeStreamEpisode, quality]);
 
+  // Enforce subtitle state (OFF by default) on HTML5 video and hls.js
+  const applySubtitlesPreference = useCallback(
+    (enabled: boolean) => {
+      const video = videoRef.current;
+      if (video && video.textTracks) {
+        for (let i = 0; i < video.textTracks.length; i++) {
+          video.textTracks[i].mode = enabled ? 'showing' : 'disabled';
+        }
+      }
+      if (hlsInstanceRef.current) {
+        hlsInstanceRef.current.subtitleDisplay = enabled;
+        hlsInstanceRef.current.subtitleTrack = enabled ? 0 : -1;
+      }
+    },
+    []
+  );
+
   // Attach hls.js or native HLS to the HTML5 <video> element whenever stream URL changes
   useEffect(() => {
+    if (playerSourceMode !== 'hls') return;
     const video = videoRef.current;
     if (!video || !activeStreamUrl) return;
 
@@ -378,12 +800,20 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
         enableWorker: true,
         lowLatencyMode: false,
       });
+      hls.subtitleDisplay = subtitlesEnabled;
+      hls.subtitleTrack = subtitlesEnabled ? 0 : -1;
+
       hlsInstanceRef.current = hls;
       hls.loadSource(activeStreamUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        applySubtitlesPreference(subtitlesEnabled);
         if (savedTime > 0 && savedTime < (video.duration || 1440)) {
           video.currentTime = savedTime;
+        }
+        if (autoPlayOnNextLoadRef.current) {
+          autoPlayOnNextLoadRef.current = false;
+          video.play().then(() => setIsPlaying(true)).catch(() => {});
         }
       });
       hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -402,13 +832,17 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
         }
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      // Native HLS support on macOS Safari & iOS
       video.src = activeStreamUrl;
       video.addEventListener(
         'loadedmetadata',
         () => {
+          applySubtitlesPreference(subtitlesEnabled);
           if (savedTime > 0 && savedTime < (video.duration || 1440)) {
             video.currentTime = savedTime;
+          }
+          if (autoPlayOnNextLoadRef.current) {
+            autoPlayOnNextLoadRef.current = false;
+            video.play().then(() => setIsPlaying(true)).catch(() => {});
           }
         },
         { once: true }
@@ -423,19 +857,27 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
         hlsInstanceRef.current = null;
       }
     };
-  }, [activeStreamUrl]);
+  }, [activeStreamUrl, playerSourceMode, applySubtitlesPreference, subtitlesEnabled]);
 
-  // Reset resume time when switching episodes
+  // Restore saved timecode when switching episodes
   useEffect(() => {
-    resumeTimeRef.current = initialProgressSeconds || 0;
-    setCurrentTime(initialProgressSeconds || 0);
-    setIsPlaying(false);
-  }, [anime.id, season.id, episode.number, initialProgressSeconds]);
+    const saved =
+      initialProgressSeconds > 0
+        ? initialProgressSeconds
+        : getSavedEpisodeTimecode(anime.title, season.id, episode.number);
+    resumeTimeRef.current = saved;
+    setCurrentTime(saved);
+    if (!autoPlayOnNextLoadRef.current) {
+      setIsPlaying(false);
+    }
+  }, [anime.id, anime.title, season.id, episode.number, initialProgressSeconds]);
 
-  // Merge episode list: use real AniLibria episode titles when available
+  // Merge episode list: use playlistEpisodes if playing a saved playlist, otherwise full season episodes
   const effectiveSeasonEpisodes: EpisodeInfo[] = useMemo(() => {
+    const baseList =
+      playlistEpisodes && playlistEpisodes.length > 0 ? playlistEpisodes : season.episodes;
     if (playerData && playerData.episodes.length > 0 && season.number === 1) {
-      return season.episodes.map((ep) => {
+      return baseList.map((ep) => {
         const realEp = playerData.episodes.find((r) => r.episode === ep.number);
         if (realEp) {
           return {
@@ -447,8 +889,8 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
         return ep;
       });
     }
-    return season.episodes;
-  }, [season, playerData]);
+    return baseList;
+  }, [season, playerData, playlistEpisodes]);
 
   const rangeGroups = useMemo(
     () => buildEpisodeRangeGroups(effectiveSeasonEpisodes.length, 25),
@@ -494,7 +936,16 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
       ? effectiveSeasonEpisodes[currentIdx + 1]
       : null;
 
-  const togglePlay = async () => {
+  const persistProgress = useCallback(
+    (timeSec: number, durSec: number) => {
+      const clamped = Math.max(0, Math.floor(timeSec));
+      saveEpisodeTimecode(anime.title, season.id, episode.number, clamped);
+      onUpdateProgress(clamped, Math.max(1, Math.floor(durSec)));
+    },
+    [anime.title, season.id, episode.number, onUpdateProgress]
+  );
+
+  const togglePlay = useCallback(async () => {
     const video = videoRef.current;
     if (!video || !activeStreamUrl) return;
     try {
@@ -508,17 +959,34 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     } catch {
       // Autoplay or stream interrupted
     }
-  };
+  }, [activeStreamUrl]);
+
+  const seekToTime = useCallback(
+    (nextTime: number) => {
+      const clamped = Math.max(0, Math.min(duration, nextTime));
+      setCurrentTime(clamped);
+      resumeTimeRef.current = clamped;
+      if (videoRef.current) {
+        videoRef.current.currentTime = clamped;
+      }
+      persistProgress(clamped, duration);
+    },
+    [duration, persistProgress]
+  );
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = Number(e.target.value);
-    setCurrentTime(val);
-    resumeTimeRef.current = val;
-    if (videoRef.current) {
-      videoRef.current.currentTime = val;
-    }
-    onUpdateProgress(Math.floor(val), Math.floor(duration));
+    seekToTime(Number(e.target.value));
   };
+
+  // Skip Opening: uses exact AniLibria opening skip markers (`skips.opening`) if available, otherwise +85s
+  const handleSkipOpening = useCallback(() => {
+    const opSkip = activeStreamEpisode?.openingSkip;
+    if (opSkip && opSkip.stop > currentTime) {
+      seekToTime(opSkip.stop);
+      return;
+    }
+    seekToTime(currentTime + 85);
+  }, [activeStreamEpisode, currentTime, seekToTime]);
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const nextVol = Number(e.target.value);
@@ -545,21 +1013,66 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     }
   };
 
-  const handleFullscreen = () => {
+  const handleFullscreen = useCallback(() => {
     const video = videoRef.current;
     const container = playerContainerRef.current;
-    if (video && 'webkitEnterFullscreen' in video) {
-      (video as unknown as { webkitEnterFullscreen: () => void }).webkitEnterFullscreen();
-      return;
-    }
     if (container && container.requestFullscreen) {
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
       } else {
         container.requestFullscreen().catch(() => {});
       }
+      return;
     }
-  };
+    if (video && 'webkitEnterFullscreen' in video) {
+      (video as unknown as { webkitEnterFullscreen: () => void }).webkitEnterFullscreen();
+    }
+  }, []);
+
+  // Auto-advance to the next episode when current finishes
+  const handleVideoEnded = useCallback(() => {
+    setIsPlaying(false);
+    saveEpisodeTimecode(anime.title, season.id, episode.number, 0);
+    if (nextEp) {
+      autoPlayOnNextLoadRef.current = true;
+      onSelectEpisode(nextEp);
+    }
+  }, [anime.title, season.id, episode.number, nextEp, onSelectEpisode]);
+
+  // Keyboard hotkeys: Space (play/pause), ArrowLeft/ArrowRight (±10s), F (fullscreen)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        seekToTime((videoRef.current?.currentTime ?? currentTime) - 10);
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        seekToTime((videoRef.current?.currentTime ?? currentTime) + 10);
+      } else if (e.code === 'KeyF' || e.key.toLowerCase() === 'f') {
+        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          handleFullscreen();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [togglePlay, seekToTime, currentTime, handleFullscreen]);
 
   const handleDirectVideoDownload = () => {
     onQueueEpisode(anime, episode, voiceover, quality, season.title);
@@ -575,10 +1088,19 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     }
   };
 
+  // Multi-player embed URL by Shikimori ID or title for titles not hosted on direct AniLibria HLS
+  const multiPlayerEmbedUrl = useMemo(() => {
+    const shikiId = catalogMeta?.shikimoriId || resolvedShikimoriId;
+    if (shikiId) {
+      return `https://kodik.cc/find-player?shikimoriID=${shikiId}&episode=${episode.number}`;
+    }
+    return `https://kodik.cc/find-player?title=${encodeURIComponent(anime.title)}&episode=${episode.number}`;
+  }, [catalogMeta, resolvedShikimoriId, anime.title, episode.number]);
+
   return (
     <div className="space-y-6">
-      {/* Anime Info Card with Real Poster inside Player */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      {/* Anime Info Card with Real Poster, Source Switcher & Favorites Control inside Player */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
         <div className="flex items-center gap-4 min-w-0">
           <div className="w-16 h-24 shrink-0 rounded-xl overflow-hidden bg-slate-900">
             <AnimeArtwork
@@ -591,12 +1113,32 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
           <div className="min-w-0 space-y-1">
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
               <span className="font-semibold text-sky-600 dark:text-sky-400">
-                AniLibria HLS Stream
+                {playerSourceMode === 'hls'
+                  ? `AniLibria HLS (${playerData?.host || 'cache.libria.fun'})`
+                  : 'Мульти-плеер (Все озвучки)'}
               </span>
-              <span aria-hidden="true">·</span>
-              <span>Хост: {playerData?.host || 'cache.libria.fun'}</span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono">{quality}</span>
+              {catalogMeta?.anilibriaCode && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono">Код: {catalogMeta.anilibriaCode}</span>
+                </>
+              )}
+              {(catalogMeta?.shikimoriId || resolvedShikimoriId) && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono">
+                    Shikimori ID: {catalogMeta?.shikimoriId || resolvedShikimoriId}
+                  </span>
+                </>
+              )}
+              {playlistEpisodes && playlistEpisodes.length > 0 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                    Плейлист подряд ({playlistEpisodes.length} сер.)
+                  </span>
+                </>
+              )}
             </div>
             <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white truncate">
               {anime.title} — {season.title}, Серия {episode.number}
@@ -607,200 +1149,306 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
           </div>
         </div>
 
-        {activeStreamUrl && (
-          <a
-            href={activeStreamUrl}
-            download={`${anime.title}_Ep${episode.number}_${quality}.m3u8`}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={() => onQueueEpisode(anime, episode, voiceover, quality, season.title)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          {/* Source Switcher: Direct AniLibria HLS vs Multi-Player (All Voiceovers) */}
+          <div
+            role="group"
+            aria-label="Переключатель источника видеопотока"
+            className="inline-flex items-center p-1 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
           >
-            <Download className="w-4 h-4" />
-            Скачать серию ({quality})
-          </a>
-        )}
-      </div>
-
-      {/* Main Real HTML5 Video Stage */}
-      <div
-        ref={playerContainerRef}
-        className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 overflow-hidden"
-      >
-        <div className="relative aspect-video max-h-[520px] w-full bg-black flex items-center justify-center overflow-hidden">
-          {isLoadingStream ? (
-            <div className="flex flex-col items-center justify-center gap-3 text-slate-300 p-6 text-center">
-              <Loader2 className="w-8 h-8 text-sky-500 animate-spin" />
-              <p className="text-sm font-medium">
-                Подключение к видеопотоку AniLibria ({anime.title})…
-              </p>
-            </div>
-          ) : streamError || !activeStreamUrl ? (
-            <div
-              role="alert"
-              data-testid="anilibria-stream-error"
-              className="flex flex-col items-center justify-center gap-3 text-center p-8 max-w-lg"
+            <button
+              type="button"
+              onClick={() => setPlayerSourceMode('hls')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                playerSourceMode === 'hls'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
             >
-              <AlertCircle className="w-10 h-10 text-amber-400 shrink-0" />
-              <p className="text-base font-bold text-white">
-                {streamError || 'Видеопоток для данного тайтла не найден в каталоге AniLibria'}
-              </p>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Для тайтла «{anime.title}» в открытом API AniLibria отсутствует прямой HLS-поток. Выберите другой релиз или проверьте наличие озвучки AniLibria.
-              </p>
-            </div>
-          ) : (
-            <>
-              <video
-                ref={videoRef}
-                data-testid="real-html5-video-player"
-                controls
-                playsInline
-                poster={anime.posterUrl || undefined}
-                className="w-full h-full max-h-[520px] object-contain bg-black"
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                onLoadedMetadata={(e) => {
-                  const vid = e.currentTarget;
-                  if (vid.duration && Number.isFinite(vid.duration)) {
-                    setDuration(vid.duration);
-                  }
-                }}
-                onTimeUpdate={(e) => {
-                  const vid = e.currentTarget;
-                  const now = vid.currentTime;
-                  const dur =
-                    vid.duration && Number.isFinite(vid.duration)
-                      ? vid.duration
-                      : episode.durationSeconds;
-                  setCurrentTime(now);
-                  resumeTimeRef.current = now;
-                  onUpdateProgress(Math.floor(now), Math.floor(dur));
-                }}
-              />
-
-              {/* Top-right stream badge */}
-              <div className="absolute top-4 right-4 pointer-events-none hidden sm:flex items-center gap-2 bg-slate-950/85 border border-slate-800 px-3 py-1.5 rounded-lg text-xs text-slate-200">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                <span>
-                  {isOfflineCached
-                    ? 'Оффлайн-кэш'
-                    : `HLS ${quality} · ${playerData?.host || 'cache.libria.fun'}`}
-                </span>
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Custom Transport & Quality Controls Bar synced with HTML5 <video> */}
-        <div className="p-4 bg-slate-900 border-t border-slate-800 space-y-3">
-          {/* Timeline Scrubber */}
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-mono tabular-nums text-slate-300 w-14">
-              {formatTimecode(currentTime)}
-            </span>
-            <label htmlFor="player-timeline-range" className="sr-only">
-              Позиция воспроизведения
-            </label>
-            <input
-              id="player-timeline-range"
-              type="range"
-              min={0}
-              max={Math.max(1, Math.floor(duration))}
-              value={Math.floor(currentTime)}
-              disabled={!activeStreamUrl}
-              onChange={handleSeek}
-              className="flex-1 accent-sky-500 h-1.5 bg-slate-700 rounded-lg cursor-pointer disabled:opacity-40"
-            />
-            <span className="text-xs font-mono tabular-nums text-slate-400 w-14 text-right">
-              {formatTimecode(duration)}
-            </span>
+              <Radio className="w-3.5 h-3.5" />
+              Прямой поток AniLibria (HLS 1080p)
+            </button>
+            <button
+              type="button"
+              onClick={() => setPlayerSourceMode('multi')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                playerSourceMode === 'multi'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Tv className="w-3.5 h-3.5" />
+              Мульти-плеер (Все озвучки)
+            </button>
           </div>
 
-          {/* Primary Transport & Track Controls */}
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-2">
+          {playlistEpisodes && onClearPlaylistMode && (
+            <button
+              type="button"
+              onClick={onClearPlaylistMode}
+              className="px-3 py-2 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              Все серии сезона
+            </button>
+          )}
+
+          {/* Favorites button + category selector inside Player */}
+          {onToggleFavorite && (
+            <div className="inline-flex items-center gap-1.5">
               <button
                 type="button"
-                disabled={!activeStreamUrl}
-                onClick={togglePlay}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                onClick={() => onToggleFavorite(anime, favoriteCategory || 'watching')}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap ${
+                  favoriteCategory
+                    ? 'bg-rose-500/15 border-rose-500/40 text-rose-600 dark:text-rose-400'
+                    : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-rose-500/50'
+                }`}
               >
-                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                {isPlaying ? 'Пауза' : 'Смотреть'}
-              </button>
-
-              <button
-                type="button"
-                disabled={!prevEp}
-                onClick={() => prevEp && onSelectEpisode(prevEp)}
-                aria-label="Предыдущая серия"
-                className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
-              >
-                <SkipBack className="w-4 h-4" />
-              </button>
-
-              <button
-                type="button"
-                disabled={!nextEp}
-                onClick={() => nextEp && onSelectEpisode(nextEp)}
-                aria-label="Следующая серия"
-                className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
-              >
-                <SkipForward className="w-4 h-4" />
-              </button>
-
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={toggleMute}
-                  aria-label={isMuted ? 'Включить звук' : 'Выключить звук'}
-                  className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 cursor-pointer"
-                >
-                  {isMuted ? (
-                    <VolumeX className="w-4 h-4 text-rose-400" />
-                  ) : (
-                    <Volume2 className="w-4 h-4" />
-                  )}
-                </button>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={isMuted ? 0 : volume}
-                  onChange={handleVolumeChange}
-                  aria-label="Громкость"
-                  className="w-20 accent-sky-500 h-1 bg-slate-700 rounded-lg cursor-pointer"
+                <Heart
+                  className={`w-3.5 h-3.5 ${
+                    favoriteCategory ? 'fill-rose-500 text-rose-500' : ''
+                  }`}
                 />
-              </div>
-
-              <button
-                type="button"
-                disabled={!activeStreamUrl}
-                onClick={handleFullscreen}
-                aria-label="Полноэкранный режим"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
-              >
-                <Maximize2 className="w-3.5 h-3.5" />
-                Во весь экран
+                {favoriteCategory ? 'В избранном' : 'В избранное'}
               </button>
+              <select
+                aria-label="Категория избранного в плеере"
+                value={favoriteCategory || ''}
+                onChange={(e) => {
+                  const val = e.target.value as FavoriteCategory | '';
+                  if (val) {
+                    onToggleFavorite(anime, val);
+                  }
+                }}
+                className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-2 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              >
+                <option value="" disabled>
+                  Список…
+                </option>
+                {FAVORITE_CATEGORIES.map((cat) => (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Main Video Stage with ONLY ONE Floating Control Bar Inside (Zero Duplicate Bottom Bar & Zero Offline Badge) */}
+      <div
+        ref={playerContainerRef}
+        className="relative aspect-video max-h-[580px] w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-black overflow-hidden flex items-center justify-center group"
+      >
+        {playerSourceMode === 'multi' ? (
+          <iframe
+            key={`${anime.id}-ep-${episode.number}-multi`}
+            src={multiPlayerEmbedUrl}
+            title={`Мульти-плеер ${anime.title} — Серия ${episode.number}`}
+            allow="autoplay; fullscreen; picture-in-picture"
+            allowFullScreen
+            referrerPolicy="no-referrer"
+            className="w-full h-full border-0 bg-black"
+          />
+        ) : isLoadingStream ? (
+          <div className="flex flex-col items-center justify-center gap-3 text-slate-300 p-6 text-center">
+            <Loader2 className="w-8 h-8 text-sky-500 animate-spin" />
+            <p className="text-sm font-medium">
+              Запрос видеопотока в каталоге AniLibria («{anime.title}», серия {episode.number})…
+            </p>
+          </div>
+        ) : streamError || !activeStreamUrl ? (
+          <div
+            role="alert"
+            data-testid="anilibria-stream-error"
+            className="flex flex-col items-center justify-center gap-3 text-center p-8 max-w-lg z-20"
+          >
+            <AlertCircle className="w-10 h-10 text-amber-400 shrink-0" />
+            <p className="text-base font-bold text-white">
+              {streamError || 'Видеопоток для данного тайтла не найден в каталоге AniLibria'}
+            </p>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Тайтл «{anime.title}» ({catalogMeta?.anilibriaCode || anime.originalTitle}) не раздаётся в открытом HLS-каталоге AniLibria. Мы не подставляем чужой поток — переключитесь на «Мульти-плеер (Все озвучки)» для просмотра именно этого аниме.
+            </p>
+            <button
+              type="button"
+              onClick={() => setPlayerSourceMode('multi')}
+              className="mt-1 inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer"
+            >
+              <Tv className="w-4 h-4" />
+              Открыть «{anime.title}» в Мульти-плеере (Все озвучки)
+            </button>
+          </div>
+        ) : (
+          <video
+            ref={videoRef}
+            data-testid="real-html5-video-player"
+            playsInline
+            poster={anime.posterUrl || undefined}
+            onClick={togglePlay}
+            className="w-full h-full object-contain bg-black cursor-pointer"
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onEnded={handleVideoEnded}
+            onLoadedMetadata={(e) => {
+              const vid = e.currentTarget;
+              applySubtitlesPreference(subtitlesEnabled);
+              if (vid.duration && Number.isFinite(vid.duration)) {
+                setDuration(vid.duration);
+              }
+            }}
+            onTimeUpdate={(e) => {
+              const vid = e.currentTarget;
+              const now = vid.currentTime;
+              const dur =
+                vid.duration && Number.isFinite(vid.duration)
+                  ? vid.duration
+                  : episode.durationSeconds;
+              setCurrentTime(now);
+              resumeTimeRef.current = now;
+              persistProgress(now, dur);
+            }}
+          />
+        )}
+
+        {/* SINGLE FLOATING CUSTOM CONTROL PANEL INSIDE THE VIDEO PLAYER */}
+        {playerSourceMode === 'hls' && (
+          <div
+            data-testid="unified-custom-player-controls"
+            className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/95 via-black/80 to-transparent px-4 pb-3 pt-8 space-y-2.5"
+          >
+            {/* Timeline Scrubber */}
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-mono tabular-nums text-slate-200 w-12">
+                {formatTimecode(currentTime)}
+              </span>
+              <label htmlFor="player-timeline-range" className="sr-only">
+                Позиция воспроизведения
+              </label>
+              <input
+                id="player-timeline-range"
+                type="range"
+                min={0}
+                max={Math.max(1, Math.floor(duration))}
+                value={Math.floor(currentTime)}
+                disabled={!activeStreamUrl}
+                onChange={handleSeek}
+                className="flex-1 accent-sky-500 h-1.5 bg-slate-700/90 rounded-lg cursor-pointer disabled:opacity-40"
+              />
+              <span className="text-xs font-mono tabular-nums text-slate-300 w-12 text-right">
+                {formatTimecode(duration)}
+              </span>
             </div>
 
-            {/* Studio Voiceover, Video Quality, Speed & Direct Download */}
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2">
-                <label
-                  htmlFor="player-voiceover-select"
-                  className="text-xs text-slate-400 whitespace-nowrap"
+            {/* Unified Floating Transport Row */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={!activeStreamUrl}
+                  onClick={togglePlay}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  Озвучка:
-                </label>
+                  {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                  {isPlaying ? 'Пауза' : 'Смотреть'}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!prevEp}
+                  onClick={() => prevEp && onSelectEpisode(prevEp)}
+                  aria-label="Предыдущая серия"
+                  title="Предыдущая серия"
+                  className="p-1.5 rounded-lg text-slate-200 hover:text-white hover:bg-white/10 disabled:opacity-40 cursor-pointer"
+                >
+                  <SkipBack className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!nextEp}
+                  onClick={() => nextEp && onSelectEpisode(nextEp)}
+                  aria-label="Следующая серия"
+                  title="Следующая серия"
+                  className="p-1.5 rounded-lg text-slate-200 hover:text-white hover:bg-white/10 disabled:opacity-40 cursor-pointer"
+                >
+                  <SkipForward className="w-4 h-4" />
+                </button>
+
+                {/* Skip Opening (+85s or exact skips.opening from AniLibria API) */}
+                <button
+                  type="button"
+                  disabled={!activeStreamUrl}
+                  onClick={handleSkipOpening}
+                  data-testid="skip-opening-button"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900/90 hover:bg-slate-800 text-sky-400 border border-slate-700/80 transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-40"
+                >
+                  <FastForward className="w-3.5 h-3.5" />
+                  Пропустить опенинг (+85с)
+                </button>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={toggleMute}
+                    aria-label={isMuted ? 'Включить звук' : 'Выключить звук'}
+                    className="p-1.5 rounded-lg text-slate-200 hover:text-white hover:bg-white/10 cursor-pointer"
+                  >
+                    {isMuted ? (
+                      <VolumeX className="w-4 h-4 text-rose-400" />
+                    ) : (
+                      <Volume2 className="w-4 h-4" />
+                    )}
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={isMuted ? 0 : volume}
+                    onChange={handleVolumeChange}
+                    aria-label="Громкость"
+                    className="w-16 accent-sky-500 h-1 bg-slate-700 rounded-lg cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              {/* Right controls inside the floating bar */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !subtitlesEnabled;
+                    setSubtitlesEnabled(next);
+                    applySubtitlesPreference(next);
+                  }}
+                  aria-pressed={subtitlesEnabled}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap ${
+                    subtitlesEnabled
+                      ? 'bg-sky-500/20 border-sky-500/50 text-sky-300'
+                      : 'bg-slate-900/90 border-slate-700/80 text-slate-300 hover:text-white'
+                  }`}
+                >
+                  {subtitlesEnabled ? (
+                    <>
+                      <Captions className="w-3.5 h-3.5" />
+                      Субтитры: Вкл
+                    </>
+                  ) : (
+                    <>
+                      <CaptionsOff className="w-3.5 h-3.5" />
+                      Субтитры: Выкл
+                    </>
+                  )}
+                </button>
+
                 <select
                   id="player-voiceover-select"
+                  aria-label="Выбор озвучки в плеере"
                   value={voiceover}
                   onChange={(e) => onChangeVoiceover(e.target.value)}
-                  className="bg-slate-800 border border-slate-700 text-slate-100 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  className="bg-slate-900/90 border border-slate-700/80 text-slate-100 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 >
                   {anime.availableVoiceovers.map((vo) => (
                     <option key={vo} value={vo}>
@@ -808,17 +1456,10 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                     </option>
                   ))}
                 </select>
-              </div>
 
-              <div className="flex items-center gap-2">
-                <label
-                  htmlFor="player-quality-select"
-                  className="text-xs text-slate-400 whitespace-nowrap"
-                >
-                  Качество:
-                </label>
                 <select
                   id="player-quality-select"
+                  aria-label="Выбор качества видео в плеере"
                   value={quality}
                   onChange={(e) => {
                     if (videoRef.current) {
@@ -826,7 +1467,7 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                     }
                     onChangeQuality(e.target.value as VideoQuality);
                   }}
-                  className="bg-slate-800 border border-slate-700 text-slate-100 text-xs font-mono rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  className="bg-slate-900/90 border border-slate-700/80 text-slate-100 text-xs font-mono rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 >
                   {VIDEO_QUALITIES.map((q) => (
                     <option key={q.value} value={q.value}>
@@ -834,20 +1475,13 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                     </option>
                   ))}
                 </select>
-              </div>
 
-              <div className="flex items-center gap-2">
-                <label
-                  htmlFor="player-speed-select"
-                  className="text-xs text-slate-400 whitespace-nowrap"
-                >
-                  Скорость:
-                </label>
                 <select
                   id="player-speed-select"
+                  aria-label="Скорость воспроизведения"
                   value={String(playbackRate)}
                   onChange={(e) => handleSpeedChange(Number(e.target.value))}
-                  className="bg-slate-800 border border-slate-700 text-slate-100 text-xs font-mono rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  className="bg-slate-900/90 border border-slate-700/80 text-slate-100 text-xs font-mono rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 >
                   <option value="0.75">0.75x</option>
                   <option value="1">1.0x</option>
@@ -855,35 +1489,44 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                   <option value="1.5">1.5x</option>
                   <option value="2">2.0x</option>
                 </select>
-              </div>
 
-              <button
-                type="button"
-                onClick={handleDirectVideoDownload}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <Download className="w-3.5 h-3.5 text-sky-400" />
-                Скачать серию ({quality})
-              </button>
+                <button
+                  type="button"
+                  onClick={handleDirectVideoDownload}
+                  aria-label="Скачать текущую серию"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-900/90 hover:bg-slate-800 text-slate-100 border border-slate-700/80 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <Download className="w-3.5 h-3.5 text-sky-400" />
+                  Скачать
+                </button>
+
+                {activeStreamUrl && (
+                  <a
+                    href={activeStreamUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-testid="active-stream-url"
+                    title={activeStreamUrl}
+                    className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-mono bg-slate-900/90 hover:bg-slate-800 text-sky-400 border border-slate-700/80"
+                  >
+                    .m3u8 <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+
+                <button
+                  type="button"
+                  disabled={!activeStreamUrl}
+                  onClick={handleFullscreen}
+                  aria-label="Полноэкранный режим (F)"
+                  title="Полноэкранный режим (горячая клавиша F)"
+                  className="p-1.5 rounded-lg text-slate-200 hover:text-white hover:bg-white/10 disabled:opacity-40 cursor-pointer"
+                >
+                  <Maximize2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
-
-          {activeStreamUrl && (
-            <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-400">
-              <span className="truncate max-w-2xl">
-                Поток HLS ({quality}): {activeStreamUrl}
-              </span>
-              <a
-                href={activeStreamUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-sky-400 hover:underline shrink-0"
-              >
-                Прямая ссылка на поток <ExternalLink className="w-3 h-3" />
-              </a>
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Season & Full Episode Selector Panel */}
