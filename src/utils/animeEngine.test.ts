@@ -58,6 +58,7 @@ test('Multi-season and full episode lists work without 6-episode cap and group r
   const clover = searchAnimeAcrossSites('Черный клевер');
   assert.equal(clover.ok, true);
   const cloverPrimary = clover.results[0];
+  assert.equal(cloverPrimary.posterUrl.startsWith('https://s4.anilist.co/'), true);
   assert.equal(cloverPrimary.seasons.length >= 3, true);
   const season1 = cloverPrimary.seasons.find((s) => s.number === 1);
   assert.ok(season1);

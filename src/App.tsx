@@ -1294,12 +1294,17 @@ export default function App() {
                         key={anime.id}
                         className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden flex flex-col md:flex-row"
                       >
-                        {/* Left Artwork Column */}
-                        <div className="md:w-52 shrink-0 bg-slate-950 relative aspect-[16/9] md:aspect-auto">
-                          <AnimeArtwork
-                            theme={anime.artworkTheme}
-                            className="w-full h-full object-cover"
-                          />
+                        {/* Left Real Poster Column */}
+                        <div className="md:w-52 shrink-0 p-3 md:pr-0 flex items-stretch">
+                          <div className="w-full h-64 md:h-full rounded-xl overflow-hidden bg-slate-950 relative">
+                            <AnimeArtwork
+                              title={anime.title}
+                              originalTitle={anime.originalTitle}
+                              posterUrl={anime.posterUrl}
+                              theme={anime.artworkTheme}
+                              className="w-full h-full object-cover rounded-xl"
+                            />
+                          </div>
                         </div>
 
                         {/* Right Content Column */}

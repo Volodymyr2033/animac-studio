@@ -1,140 +1,196 @@
-import React from 'react';
-import { AnimeSeries } from '../utils/animeEngine';
+import React, { useEffect, useState } from 'react';
+import { ANIME_POSTER_CDN_MAP, AnimeSeries } from '../utils/animeEngine';
 
 interface AnimeArtworkProps {
-  theme: AnimeSeries['artworkTheme'];
+  title?: string;
+  originalTitle?: string;
+  posterUrl?: string;
+  theme?: AnimeSeries['artworkTheme'];
   className?: string;
 }
 
-export const AnimeArtwork: React.FC<AnimeArtworkProps> = ({ theme, className = 'w-full h-full' }) => {
-  switch (theme) {
-    case 'samurai':
-      return (
-        <svg viewBox="0 0 360 480" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} role="img" aria-label="Постер аниме-релиза (Самурайский экшен)">
-          <defs>
-            <linearGradient id="samurai-sky" x1="0" y1="0" x2="0" y2="480" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stopColor="#090D16" />
-              <stop offset="55%" stopColor="#1E1B4B" />
-              <stop offset="100%" stopColor="#7C2D12" />
-            </linearGradient>
-          </defs>
-          <rect width="360" height="480" fill="url(#samurai-sky)" />
-          <circle cx="240" cy="150" r="78" fill="#F97316" fillOpacity="0.85" />
-          <circle cx="240" cy="150" r="64" fill="#FDE047" fillOpacity="0.45" />
-          <path d="M20 340L95 310L170 340H20Z" fill="#0F172A" />
-          <path d="M35 312L95 285L155 312H35Z" fill="#0F172A" />
-          <path d="M120 480L155 320L195 310L235 480H120Z" fill="#020617" />
-          <circle cx="176" cy="282" r="22" fill="#020617" />
-          <path d="M132 272L176 254L222 272H132Z" fill="#0F172A" />
-          <line x1="90" y1="365" x2="295" y2="215" stroke="#38BDF8" strokeWidth="3.5" strokeLinecap="round" />
-          <line x1="90" y1="365" x2="295" y2="215" stroke="#E0F2FE" strokeWidth="1.2" strokeLinecap="round" />
-          <g stroke="#94A3B8" strokeOpacity="0.3" strokeWidth="1">
-            <line x1="60" y1="40" x2="40" y2="120" />
-            <line x1="140" y1="80" x2="120" y2="160" />
-            <line x1="310" y1="60" x2="290" y2="140" />
-            <line x1="270" y1="260" x2="250" y2="340" />
-          </g>
-        </svg>
-      );
+const dynamicPosterCache = new Map<string, string>();
 
-    case 'alchemist':
-      return (
-        <svg viewBox="0 0 360 480" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} role="img" aria-label="Постер аниме-релиза (Магия и Фэнтези)">
-          <defs>
-            <linearGradient id="alch-bg" x1="0" y1="0" x2="360" y2="480" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stopColor="#0C192C" />
-              <stop offset="60%" stopColor="#1E3A5F" />
-              <stop offset="100%" stopColor="#B45309" />
-            </linearGradient>
-          </defs>
-          <rect width="360" height="480" fill="url(#alch-bg)" />
-          <circle cx="180" cy="210" r="115" stroke="#FBBF24" strokeOpacity="0.4" strokeWidth="2" strokeDasharray="6 6" />
-          <circle cx="180" cy="210" r="86" stroke="#38BDF8" strokeOpacity="0.65" strokeWidth="2" />
-          <ellipse cx="180" cy="210" rx="110" ry="38" transform="rotate(-28 180 210)" stroke="#FDE68A" strokeOpacity="0.7" strokeWidth="1.8" />
-          <ellipse cx="180" cy="210" rx="110" ry="38" transform="rotate(28 180 210)" stroke="#FDE68A" strokeOpacity="0.5" strokeWidth="1.5" />
-          <circle cx="180" cy="210" r="14" fill="#FDE047" />
-          <path d="M0 480V370C60 330 120 330 180 355C240 330 300 330 360 370V480H0Z" fill="#090D16" />
-        </svg>
-      );
+const ADDITIONAL_POSTER_FALLBACKS: Record<string, string> = {
+  'великий из бродячих псов':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21311-532b3t9B9X2H.jpg',
+  'bungou stray dogs':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21311-532b3t9B9X2H.jpg',
+  'тетрадь смерти':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx1535-lawCwhzhi96X.jpg',
+  'death note':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx1535-lawCwhzhi96X.jpg',
+  'стальной алхимик':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx5114-KJTQz9AIm64X.jpg',
+  'токийский гуль':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx20605-fmnHdf5M7m6p.jpg',
+  'реинкарнация безработного':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx108465-B9S9zC68e91j.jpg',
+};
 
-    case 'mecha':
-      return (
-        <svg viewBox="0 0 360 480" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} role="img" aria-label="Постер аниме-релиза (Фантастика и Система)">
-          <defs>
-            <linearGradient id="mecha-bg" x1="0" y1="0" x2="0" y2="480" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stopColor="#020617" />
-              <stop offset="65%" stopColor="#0F172A" />
-              <stop offset="100%" stopColor="#0284C7" />
-            </linearGradient>
-          </defs>
-          <rect width="360" height="480" fill="url(#mecha-bg)" />
-          <circle cx="180" cy="620" r="300" fill="#0369A1" fillOpacity="0.45" stroke="#38BDF8" strokeWidth="3" />
-          <polygon points="180,115 105,260 180,235 255,260" fill="#1E293B" stroke="#E2E8F0" strokeWidth="2" />
-          <polygon points="180,165 92,115 152,188" fill="#F43F5E" />
-          <polygon points="180,165 268,115 208,188" fill="#F43F5E" />
-          <polygon points="145,202 174,210 150,218" fill="#38BDF8" />
-          <polygon points="215,202 186,210 210,218" fill="#38BDF8" />
-        </svg>
-      );
+const DEFAULT_FALLBACK_POSTER =
+  ANIME_POSTER_CDN_MAP['black-clover'] ||
+  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx97940-fyh8o7gNbha0.png';
 
-    case 'express':
-      return (
-        <svg viewBox="0 0 360 480" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} role="img" aria-label="Постер аниме-релиза (Приключения)">
-          <defs>
-            <linearGradient id="exp-bg" x1="0" y1="0" x2="0" y2="480" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stopColor="#090D16" />
-              <stop offset="55%" stopColor="#1E1B4B" />
-              <stop offset="100%" stopColor="#0E7490" />
-            </linearGradient>
-          </defs>
-          <rect width="360" height="480" fill="url(#exp-bg)" />
-          <path d="M0 140C90 95 190 175 360 110" stroke="#2DD4BF" strokeOpacity="0.55" strokeWidth="14" strokeLinecap="round" />
-          <path d="M0 175C120 130 220 205 360 145" stroke="#38BDF8" strokeOpacity="0.4" strokeWidth="8" strokeLinecap="round" />
-          <rect x="24" y="305" width="312" height="28" rx="6" fill="#0F172A" stroke="#38BDF8" strokeWidth="1.5" />
-          <rect x="42" y="312" width="28" height="14" rx="2" fill="#FDE047" />
-          <rect x="82" y="312" width="28" height="14" rx="2" fill="#FDE047" />
-          <rect x="122" y="312" width="28" height="14" rx="2" fill="#FDE047" />
-          <rect x="162" y="312" width="28" height="14" rx="2" fill="#FDE047" />
-          <rect x="202" y="312" width="28" height="14" rx="2" fill="#FDE047" />
-          <rect x="242" y="312" width="28" height="14" rx="2" fill="#FDE047" />
-          <rect x="282" y="312" width="28" height="14" rx="2" fill="#FDE047" />
-          <rect x="0" y="335" width="360" height="145" fill="#082F49" fillOpacity="0.7" />
-          <line x1="20" y1="352" x2="340" y2="352" stroke="#FDE047" strokeOpacity="0.35" strokeWidth="2" strokeDasharray="16 12" />
-        </svg>
-      );
+async function fetchRealAnimePoster(searchQuery: string): Promise<string | null> {
+  const clean = searchQuery.trim();
+  if (!clean) return null;
 
-    case 'cyber':
-      return (
-        <svg viewBox="0 0 360 480" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} role="img" aria-label="Постер аниме-релиза (Городской экшен)">
-          <rect width="360" height="480" fill="#090D16" />
-          <rect x="40" y="120" width="55" height="360" fill="#111827" stroke="#1E293B" />
-          <rect x="110" y="75" width="75" height="405" fill="#0F172A" stroke="#334155" />
-          <rect x="200" y="145" width="65" height="335" fill="#111827" stroke="#1E293B" />
-          <rect x="275" y="100" width="50" height="380" fill="#0F172A" stroke="#1E293B" />
-          <path d="M20 250L85 250L115 170L155 320L195 140L230 290L265 220L340 220" stroke="#0EA5E9" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-          <circle cx="195" cy="140" r="6" fill="#38BDF8" />
-        </svg>
-      );
+  const cached = dynamicPosterCache.get(clean.toLowerCase());
+  if (cached) return cached;
 
-    case 'shrine':
-    default:
-      return (
-        <svg viewBox="0 0 360 480" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} role="img" aria-label="Постер аниме-релиза (Мистика и Проклятия)">
-          <defs>
-            <linearGradient id="shrine-bg" x1="0" y1="0" x2="0" y2="480" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stopColor="#1E1B4B" />
-              <stop offset="60%" stopColor="#4C1D95" />
-              <stop offset="100%" stopColor="#9A3412" />
-            </linearGradient>
-          </defs>
-          <rect width="360" height="480" fill="url(#shrine-bg)" />
-          <circle cx="180" cy="175" r="85" fill="#FDE68A" fillOpacity="0.25" />
-          <path d="M55 170C135 190 225 190 305 170L315 188C225 206 135 206 45 188L55 170Z" fill="#EF4444" />
-          <rect x="75" y="218" width="210" height="14" fill="#DC2626" />
-          <rect x="95" y="192" width="18" height="240" fill="#B91C1C" />
-          <rect x="247" y="192" width="18" height="240" fill="#B91C1C" />
-          <path d="M0 420L360 420V480H0V420Z" fill="#090D16" />
-        </svg>
-      );
+  // 1. Check built-in CDN dictionary first
+  const lower = clean.toLowerCase();
+  for (const [k, url] of Object.entries(ADDITIONAL_POSTER_FALLBACKS)) {
+    if (lower.includes(k) || k.includes(lower)) {
+      dynamicPosterCache.set(lower, url);
+      return url;
+    }
   }
+
+  // 2. Try Shikimori public API (https://shikimori.one/api/animes?search=)
+  try {
+    const shikiRes = await fetch(
+      `https://shikimori.one/api/animes?search=${encodeURIComponent(clean)}&limit=1`,
+      { signal: AbortSignal.timeout(2500) }
+    );
+    if (shikiRes.ok) {
+      const shikiData = await shikiRes.json();
+      const relUrl = shikiData?.[0]?.image?.original || shikiData?.[0]?.image?.preview;
+      if (relUrl && typeof relUrl === 'string') {
+        const fullUrl = relUrl.startsWith('http') ? relUrl : `https://shikimori.one${relUrl}`;
+        dynamicPosterCache.set(lower, fullUrl);
+        return fullUrl;
+      }
+    }
+  } catch {
+    // Fallback to AniList / Jikan if Shikimori is blocked by CORS/Cloudflare
+  }
+
+  // 3. Try AniList GraphQL public API (https://graphql.anilist.co)
+  try {
+    const aniRes = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query:
+          'query ($s: String) { Media(search: $s, type: ANIME) { coverImage { extraLarge large } } }',
+        variables: { s: clean },
+      }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (aniRes.ok) {
+      const aniData = await aniRes.json();
+      const cover =
+        aniData?.data?.Media?.coverImage?.extraLarge ||
+        aniData?.data?.Media?.coverImage?.large;
+      if (cover && typeof cover === 'string') {
+        dynamicPosterCache.set(lower, cover);
+        return cover;
+      }
+    }
+  } catch {
+    // Continue to Jikan fallback
+  }
+
+  // 4. Try Jikan API (https://api.jikan.moe/v4/anime?q=)
+  try {
+    const jikanRes = await fetch(
+      `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(clean)}&limit=1`,
+      { signal: AbortSignal.timeout(3000) }
+    );
+    if (jikanRes.ok) {
+      const jikanData = await jikanRes.json();
+      const jpgUrl =
+        jikanData?.data?.[0]?.images?.jpg?.large_image_url ||
+        jikanData?.data?.[0]?.images?.jpg?.image_url;
+      if (jpgUrl && typeof jpgUrl === 'string') {
+        dynamicPosterCache.set(lower, jpgUrl);
+        return jpgUrl;
+      }
+    }
+  } catch {
+    // Ignore network timeout
+  }
+
+  return null;
+}
+
+export const AnimeArtwork: React.FC<AnimeArtworkProps> = ({
+  title = 'Аниме',
+  originalTitle = '',
+  posterUrl = '',
+  className = 'w-full h-full object-cover',
+}) => {
+  const [resolvedUrl, setResolvedUrl] = useState<string>(() => {
+    if (posterUrl) return posterUrl;
+    const lowerTitle = title.toLowerCase();
+    for (const [k, url] of Object.entries(ADDITIONAL_POSTER_FALLBACKS)) {
+      if (lowerTitle.includes(k)) return url;
+    }
+    return '';
+  });
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoaded(false);
+
+    if (posterUrl) {
+      setResolvedUrl(posterUrl);
+      return;
+    }
+
+    const queryToUse =
+      originalTitle && !originalTitle.includes('Original Animation')
+        ? originalTitle.split('/')[0].trim()
+        : title;
+
+    fetchRealAnimePoster(queryToUse).then((url) => {
+      if (cancelled) return;
+      if (url) {
+        setResolvedUrl(url);
+      } else {
+        fetchRealAnimePoster(title).then((ruUrl) => {
+          if (cancelled) return;
+          setResolvedUrl(ruUrl || DEFAULT_FALLBACK_POSTER);
+        });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [posterUrl, title, originalTitle]);
+
+  const finalSrc = resolvedUrl || posterUrl || DEFAULT_FALLBACK_POSTER;
+
+  return (
+    <div className="relative w-full h-full overflow-hidden rounded-xl bg-slate-900">
+      {/* Smooth skeleton shimmer while real poster loads */}
+      {!isLoaded && (
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950 animate-pulse"
+        />
+      )}
+      <img
+        src={finalSrc}
+        alt={`Постер аниме ${title}`}
+        loading="lazy"
+        onLoad={() => setIsLoaded(true)}
+        onError={(e) => {
+          const target = e.currentTarget;
+          if (target.src !== DEFAULT_FALLBACK_POSTER) {
+            target.src = DEFAULT_FALLBACK_POSTER;
+          }
+          setIsLoaded(true);
+        }}
+        style={{ objectFit: 'cover' }}
+        className={`${className} w-full h-full object-cover rounded-xl transition-opacity duration-500 ${
+          isLoaded ? 'opacity-100' : 'opacity-0'
+        }`}
+      />
+    </div>
+  );
 };

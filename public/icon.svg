@@ -2,23 +2,23 @@
   <defs>
     <linearGradient id="bg-indigo" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#0B0420" />
-      <stop offset="50%" stop-color="#170B3B" />
-      <stop offset="100%" stop-color="#2A0E5C" />
+      <stop offset="50%" stop-color="#150936" />
+      <stop offset="100%" stop-color="#280D58" />
     </linearGradient>
-    <linearGradient id="neon-rim" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
+    <linearGradient id="neon-rim" x1="80" y1="80" x2="432" y2="432" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#00F5FF" />
       <stop offset="50%" stop-color="#A855F7" />
       <stop offset="100%" stop-color="#FF2A85" />
     </linearGradient>
-    <linearGradient id="ear-inner-l" x1="110" y1="95" x2="185" y2="210" gradientUnits="userSpaceOnUse">
+    <linearGradient id="ear-inner-l" x1="115" y1="95" x2="190" y2="210" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#00F5FF" stop-opacity="0.85" />
       <stop offset="100%" stop-color="#FF2A85" stop-opacity="0.35" />
     </linearGradient>
-    <linearGradient id="ear-inner-r" x1="402" y1="95" x2="327" y2="210" gradientUnits="userSpaceOnUse">
+    <linearGradient id="ear-inner-r" x1="397" y1="95" x2="322" y2="210" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#FF2A85" stop-opacity="0.85" />
       <stop offset="100%" stop-color="#00F5FF" stop-opacity="0.35" />
     </linearGradient>
-    <linearGradient id="emblem-grad" x1="180" y1="210" x2="340" y2="390" gradientUnits="userSpaceOnUse">
+    <linearGradient id="play-grad" x1="205" y1="220" x2="325" y2="345" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#00F5FF" />
       <stop offset="100%" stop-color="#FF2A85" />
     </linearGradient>
@@ -32,38 +32,32 @@
   <rect width="512" height="512" rx="116" fill="url(#bg-indigo)" />
   <rect x="18" y="18" width="476" height="476" rx="100" stroke="url(#neon-rim)" stroke-opacity="0.45" stroke-width="4" />
 
-  <!-- Subtle Cyber Grid Accent -->
-  <circle cx="256" cy="276" r="168" stroke="#00F5FF" stroke-opacity="0.14" stroke-width="2" stroke-dasharray="10 8" />
+  <!-- Subtle Neon Halo Ring -->
+  <circle cx="256" cy="280" r="168" stroke="#00F5FF" stroke-opacity="0.16" stroke-width="2.5" stroke-dasharray="10 8" />
 
-  <!-- Stylized Nekomimi (Cat Ears Head Silhouette) with Cyan/Magenta Neon Contour -->
+  <!-- Stylized Nekomimi (Cat Ears Silhouette) with Cyan/Magenta Neon Contour -->
   <g filter="url(#neon-glow)">
     <path
-      d="M104 268 L116 96 L212 178 C226 173 241 170 256 170 C271 170 286 173 300 178 L396 96 L408 268 C416 346 356 416 256 416 C156 416 96 346 104 268 Z"
-      fill="#12072B"
+      d="M104 268 L116 94 L212 178 C226 173 241 170 256 170 C271 170 286 173 300 178 L396 94 L408 268 C416 348 356 418 256 418 C156 418 96 348 104 268 Z"
+      fill="#110629"
       stroke="url(#neon-rim)"
-      stroke-width="14"
+      stroke-width="15"
       stroke-linejoin="round"
     />
   </g>
 
   <!-- Inner Nekomimi Ear Triangles -->
-  <polygon points="132,134 126,222 190,182" fill="url(#ear-inner-l)" />
-  <polygon points="380,134 386,222 322,182" fill="url(#ear-inner-r)" />
+  <polygon points="132,132 126,222 192,182" fill="url(#ear-inner-l)" />
+  <polygon points="380,132 386,222 320,182" fill="url(#ear-inner-r)" />
 
-  <!-- Stylized Letter "A" + Play/Download Arrow Core Inside Nekomimi -->
-  <path
-    d="M256 202 L192 346 H224 L238 312 H274 L288 346 H320 L256 202 Z"
-    fill="url(#emblem-grad)"
-  />
-  <!-- Play Triangle Cutout Inside "A" -->
-  <polygon points="244,248 276,268 244,288" fill="#0F0529" />
-
-  <!-- Neon Download Arrow Indicator at Base -->
-  <path
-    d="M256 326 V378 M256 378 L232 354 M256 378 L280 354"
-    stroke="#00F5FF"
-    stroke-width="12"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  />
+  <!-- Central Glowing Play Icon Inside Nekomimi -->
+  <g filter="url(#neon-glow)">
+    <path
+      d="M222 232 L316 288 L222 344 Z"
+      fill="url(#play-grad)"
+      stroke="#E0F2FE"
+      stroke-width="4"
+      stroke-linejoin="round"
+    />
+  </g>
 </svg>

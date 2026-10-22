@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "AniMac Studio",
+  "short_name": "AniMac Studio",
+  "description": "Кроссплатформенный клиент и загрузчик аниме для macOS, Windows и Android с поддержкой YummyAnime.TV, AnimeGO и AnimeVost.org.",
+  "theme_color": "#121826",
+  "background_color": "#121826",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ]
+}

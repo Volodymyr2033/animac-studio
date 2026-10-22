@@ -11,14 +11,14 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
+        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'manifest.json'],
         manifest: {
           id: '/',
-          name: 'AniMac Studio — Кроссплатформенный загрузчик и плеер аниме',
-          short_name: 'AniMac',
-          description: 'Загрузчик и оффлайн-плеер аниме для macOS, Windows и Android с поддержкой YummyAnime.TV, AnimeGO и AnimeVost.org.',
-          theme_color: '#0F172A',
-          background_color: '#0F172A',
+          name: 'AniMac Studio',
+          short_name: 'AniMac Studio',
+          description: 'Кроссплатформенный клиент и загрузчик аниме для macOS, Windows и Android с поддержкой YummyAnime.TV, AnimeGO и AnimeVost.org.',
+          theme_color: '#121826',
+          background_color: '#121826',
           display: 'standalone',
           start_url: '/',
           scope: '/',
@@ -33,18 +33,12 @@ export default defineConfig(() => {
               src: '/pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
-              purpose: 'any',
-            },
-            {
-              src: '/pwa-maskable-512x512.png',
-              sizes: '512x512',
-              type: 'image/png',
-              purpose: 'maskable',
+              purpose: 'maskable any',
             },
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -68,6 +62,20 @@ export default defineConfig(() => {
                 expiration: {
                   maxEntries: 10,
                   maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: /^https:\/\/(shikimori\.one|cdn\.myanimelist\.net|s4\.anilist\.co)\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'anime-posters-cache',
+                expiration: {
+                  maxEntries: 100,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
                 },
                 cacheableResponse: {
                   statuses: [0, 200],

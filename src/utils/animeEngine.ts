@@ -30,6 +30,7 @@ export interface AnimeSeries {
   id: string;
   title: string;
   originalTitle: string;
+  posterUrl: string;
   sourceSite: SourceSite;
   sourceUrl: string;
   year: number;
@@ -1767,6 +1768,39 @@ function buildSlugFromText(text: string): string {
   return out.replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'anime-release';
 }
 
+export const ANIME_POSTER_CDN_MAP: Record<string, string> = {
+  'kusuriya-no-hitorigoto':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx161645-QLbzHXiYRgV2.jpg',
+  'black-clover':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx97940-fyh8o7gNbha0.png',
+  'chainsaw-man':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx127230-DdP4vAdssLoz.png',
+  'jujutsu-kaisen':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx113415-LHBAeoZDIsnF.jpg',
+  'kimetsu-no-yaiba':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101922-WBsBl0ClmgYL.jpg',
+  'solo-leveling':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx151807-it355ZgzquUd.png',
+  'sousou-no-frieren':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx154587-qQTzQnEJJ3oB.jpg',
+  'shingeki-no-kyojin':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx16498-buvcRTBx4NSm.jpg',
+  'one-piece':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21-ELSYx3yMPcKM.jpg',
+  'bleach-tybw':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx116674-p3zK4PUX2Aag.jpg',
+  'naruto-shippuuden':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx1735-kGfVm0YqCPcu.png',
+  'blue-lock':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx137822-U8naszP96vzC.png',
+  'spy-x-family':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx140960-Kb6R5nYQfjmP.jpg',
+  'oshi-no-ko':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx150672-WqmmwZ4nMzAy.png',
+  'dandadan':
+    'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx171018-60q1B6GK2Ghb.jpg',
+};
+
 function buildMultiSiteResultsFromTemplate(
   template: KnownAnimeTemplate,
   preferredSeasonNumber?: number | null
@@ -1785,6 +1819,8 @@ function buildMultiSiteResultsFromTemplate(
     (preferredSeasonNumber
       ? seasons.find((s) => s.number === preferredSeasonNumber)
       : undefined) || seasons[0];
+
+  const posterUrl = ANIME_POSTER_CDN_MAP[template.slug] || '';
 
   const siteConfigs: {
     site: SourceSite;
@@ -1816,6 +1852,7 @@ function buildMultiSiteResultsFromTemplate(
     id: `${template.slug}-${cfg.site.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
     title: template.title,
     originalTitle: template.originalTitle,
+    posterUrl,
     sourceSite: cfg.site,
     sourceUrl: cfg.url,
     year: preferredSeason.year,
